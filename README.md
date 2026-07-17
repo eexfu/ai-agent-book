@@ -628,7 +628,9 @@ Claude API 的快速入门示例和最佳实践，涵盖各种使用场景。
 ## ⭐ Star History
 
 <a href="https://star-history.com/#bojieli/ai-agent-book&Date">
-  <img alt="Star History Chart" src="assets/star-history.svg" width="720" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=bojieli/ai-agent-book&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=bojieli/ai-agent-book&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=bojieli/ai-agent-book&type=Date" width="720" />
+  </picture>
 </a>
-
-<sub>图表由 [GitHub Actions 定时任务](.github/workflows/star-history.yml) 自动更新，点击可跳转到 star-history.com 查看实时数据。</sub>
