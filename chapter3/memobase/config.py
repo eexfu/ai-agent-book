@@ -9,10 +9,37 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+
+def _openrouter_model_id(model) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-4o-mini"
+    if "/" in m:
+        return m
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    return "openai/gpt-4o-mini"
+
+
 # Kimi K3 Model Configuration
-KIMI_API_KEY = os.getenv("KIMI_API_KEY", "sk-your-api-key")
+KIMI_API_KEY = os.getenv("KIMI_API_KEY", "") or os.getenv("MOONSHOT_API_KEY", "")
 KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 KIMI_MODEL = "kimi-k3"  # Kimi K3 model identifier
+
+# Universal OpenRouter fallback: primary key (KIMI/MOONSHOT) absent but
+# OPENROUTER_API_KEY present -> route the chat LLM through OpenRouter.
+if not KIMI_API_KEY and os.getenv("OPENROUTER_API_KEY"):
+    KIMI_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    KIMI_BASE_URL = "https://openrouter.ai/api/v1"
+    KIMI_MODEL = _openrouter_model_id(KIMI_MODEL)
 
 # Model Parameters
 MODEL_TEMPERATURE = 0.7

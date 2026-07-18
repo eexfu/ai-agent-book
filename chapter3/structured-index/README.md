@@ -329,3 +329,16 @@ This project provides backend services for the agentic-rag project. See the agen
 - [RAPTOR Paper](https://arxiv.org/abs/2401.18059)
 - [GraphRAG by Microsoft](https://github.com/microsoft/graphrag)
 - [Intel Architecture Manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+
+
+## OpenRouter 通用回退 / Universal OpenRouter fallback
+
+This experiment now supports a **universal OpenRouter fallback** for its chat LLM.
+
+- If the primary provider key (e.g. `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `OPENAI_API_KEY` / `DOUBAO_API_KEY` …) is present, behavior is unchanged.
+- Else if `OPENROUTER_API_KEY` is set, the chat LLM is automatically routed through OpenRouter (`https://openrouter.ai/api/v1`). Model names are mapped automatically: `gpt-*`/`o1-*` → `openai/…`, `claude-*` → `anthropic/claude-opus-4.8`, ids already containing `/` are kept as-is, and other provider-native ids (e.g. `kimi-k3`, `doubao-*`) fall back to `openai/gpt-4o-mini`. Set `OPENROUTER_MODEL` to force a specific OpenRouter model id.
+- Else a clear error lists the accepted keys.
+
+Add `OPENROUTER_API_KEY=...` to your `.env` (see `env.example`) to enable it.
+
+> Note: embeddings here are local SentenceTransformers (all-MiniLM-L6-v2), so they are unaffected — only the chat LLM used for RAPTOR summarization and GraphRAG entity extraction is routed through OpenRouter.

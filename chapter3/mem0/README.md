@@ -368,3 +368,16 @@ For issues and questions:
 - Check the troubleshooting section
 - Review example code in `quickstart.py`
 - Refer to the main AI Agent Book documentation
+
+
+## OpenRouter 通用回退 / Universal OpenRouter fallback
+
+This experiment now supports a **universal OpenRouter fallback** for its chat LLM.
+
+- If the primary provider key (e.g. `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `OPENAI_API_KEY` / `DOUBAO_API_KEY` …) is present, behavior is unchanged.
+- Else if `OPENROUTER_API_KEY` is set, the chat LLM is automatically routed through OpenRouter (`https://openrouter.ai/api/v1`). Model names are mapped automatically: `gpt-*`/`o1-*` → `openai/…`, `claude-*` → `anthropic/claude-opus-4.8`, ids already containing `/` are kept as-is, and other provider-native ids (e.g. `kimi-k3`, `doubao-*`) fall back to `openai/gpt-4o-mini`. Set `OPENROUTER_MODEL` to force a specific OpenRouter model id.
+- Else a clear error lists the accepted keys.
+
+Add `OPENROUTER_API_KEY=...` to your `.env` (see `env.example`) to enable it.
+
+> Note: mem0's embedder still uses OpenAI embeddings (OpenRouter has no embeddings endpoint), so `OPENAI_API_KEY` is still required for storing/retrieving memories. The OpenRouter fallback only covers the chat LLM (fact extraction, ADD/UPDATE/DELETE decisions, and answering).

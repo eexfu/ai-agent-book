@@ -19,6 +19,37 @@ def _reasoning_safe_temperature(model, requested=1.0):
     return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
 
 
+def openrouter_model_id(model) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-4o-mini"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-4o)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-4o-mini"
+
+
+# Default model per provider, used to map onto an OpenRouter model id when the
+# primary provider key is missing but OPENROUTER_API_KEY is present.
+PROVIDER_DEFAULT_MODELS = {
+    "siliconflow": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+    "doubao": "doubao-seed-1-6-thinking-250715",
+    "kimi": "kimi-k3",
+    "moonshot": "kimi-k3",
+}
+
+
 class MemoryMode(Enum):
     """Memory management modes"""
     NOTES = "notes"  # Simple notes/facts (basic)

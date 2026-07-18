@@ -60,7 +60,7 @@ class GraphRAGIndexer:
     
     def __init__(self, config: GraphRAGConfig):
         self.config = config
-        self.client = OpenAI(api_key=config.llm_api_key)
+        self.client = OpenAI(api_key=config.llm_api_key, base_url=config.base_url)
         self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
         
         # Knowledge graph components

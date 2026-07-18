@@ -18,20 +18,52 @@ def _reasoning_safe_temperature(model, requested=1.0):
     return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
 
 
+def _openrouter_model_id(model) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-4o-mini"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-4o)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-4o-mini"
+
+
 @dataclass
 class KimiConfig:
     """Configuration for Kimi K3 model."""
-    
+
     api_key: str = field(default_factory=lambda: os.getenv("KIMI_API_KEY", ""))
     model_name: str = field(default_factory=lambda: os.getenv("MODEL_NAME", "kimi-k3"))
     max_tokens: int = field(default_factory=lambda: int(os.getenv("MAX_TOKENS", "128000")))
     temperature: float = field(default_factory=lambda: float(os.getenv("TEMPERATURE", "0.7")))
     api_base: str = field(default_factory=lambda: os.getenv("KIMI_API_BASE", "https://api.moonshot.cn/v1"))
-    
+
+    def __post_init__(self):
+        """Universal OpenRouter fallback for the chat LLM: when KIMI_API_KEY is
+        absent but OPENROUTER_API_KEY is present, route the chat model (used by
+        KimiK3Client and threaded into mem0's own LLM config) through OpenRouter.
+        NB: mem0's embedder still uses OpenAI embeddings (OpenRouter has no
+        embeddings endpoint), so OPENAI_API_KEY remains needed for memory add."""
+        if not self.api_key and os.getenv("OPENROUTER_API_KEY"):
+            self.api_key = os.getenv("OPENROUTER_API_KEY")
+            self.api_base = "https://openrouter.ai/api/v1"
+            self.model_name = _openrouter_model_id(self.model_name)
+
     def validate(self) -> bool:
         """Validate Kimi configuration."""
         if not self.api_key:
-            raise ValueError("KIMI_API_KEY is required")
+            raise ValueError("KIMI_API_KEY is required (or set OPENROUTER_API_KEY for the fallback)")
         if self.max_tokens <= 0 or self.max_tokens > 128000:
             raise ValueError("MAX_TOKENS must be between 1 and 128000")
         if self.temperature < 0 or self.temperature > 2:

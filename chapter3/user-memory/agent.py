@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import uuid
 from openai import OpenAI
-from config import Config, MemoryMode
+from config import Config, MemoryMode, openrouter_model_id, PROVIDER_DEFAULT_MODELS
 from memory_manager import create_memory_manager, BaseMemoryManager
 from conversation_history import ConversationHistory, ConversationTurn
 
@@ -83,9 +83,20 @@ class UserMemoryAgent:
         
         # Get API key for provider
         api_key = api_key or Config.get_api_key(self.provider)
+
+        # Universal OpenRouter fallback: primary provider key absent but
+        # OPENROUTER_API_KEY present -> route this agent through OpenRouter.
+        if not api_key and self.provider != "openrouter" and Config.OPENROUTER_API_KEY:
+            model = openrouter_model_id(model or PROVIDER_DEFAULT_MODELS.get(self.provider))
+            self.provider = "openrouter"
+            api_key = Config.OPENROUTER_API_KEY
+
         if not api_key:
-            raise ValueError(f"API key required for provider '{self.provider}'. Check environment variables.")
-        
+            raise ValueError(
+                f"API key required for provider '{self.provider}'. Set the "
+                f"provider's key or OPENROUTER_API_KEY to use the OpenRouter fallback."
+            )
+
         # Configure client based on provider
         if self.provider == "siliconflow":
             self.client = OpenAI(

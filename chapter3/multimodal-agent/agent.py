@@ -22,7 +22,7 @@ from google.genai import types
 # OpenAI imports
 from openai import OpenAI, AsyncOpenAI
 
-from config import Config, ExtractionMode, Provider, ModelConfig
+from config import Config, ExtractionMode, Provider, ModelConfig, _openrouter_model_id
 
 
 @dataclass
@@ -131,9 +131,16 @@ class MultimodalTools:
         return await self._analyze_with_gemini_pdf(content, query)
         
     async def _analyze_with_openai(self, content: MultimodalContent, query: str) -> str:
-        """Use OpenAI for content analysis"""
-        client = AsyncOpenAI(api_key=self.agent.config.openai_api_key)
-        
+        """Use OpenAI (or OpenRouter fallback) for content analysis"""
+        cfg = self.agent.config
+        if cfg.openai_api_key:
+            client = AsyncOpenAI(api_key=cfg.openai_api_key)
+            model = "gpt-4o"
+        else:
+            # Universal OpenRouter fallback (no direct OpenAI key)
+            client = AsyncOpenAI(api_key=cfg.openrouter_api_key, base_url=cfg.openrouter_base_url)
+            model = _openrouter_model_id("gpt-4o")
+
         messages = [{
             "role": "user",
             "content": [
@@ -146,13 +153,13 @@ class MultimodalTools:
                 }
             ]
         }]
-        
+
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=messages,
             temperature=self.agent.config.temperature
         )
-        
+
         return response.choices[0].message.content
         
     async def _analyze_with_doubao(self, content: MultimodalContent, query: str) -> str:
@@ -407,7 +414,12 @@ class MultimodalAgent:
         
         if not model_config.supports_native_multimodal:
             raise ValueError(f"Model {self.current_model} doesn't support native multimodality")
-            
+
+        # Universal OpenRouter fallback: the model's own provider key is missing
+        # but OPENROUTER_API_KEY is present -> route via OpenRouter (OpenAI-compat).
+        if self.config.use_openrouter(model_config.provider):
+            return await self._process_native_openrouter(model_config, content, query)
+
         if model_config.provider == Provider.GEMINI:
             return await self._process_native_gemini(content, query)
         elif model_config.provider == Provider.OPENAI:
@@ -416,6 +428,35 @@ class MultimodalAgent:
             return await self._process_native_doubao(content, query)
         else:
             raise ValueError(f"Unknown provider: {model_config.provider}")
+
+    async def _process_native_openrouter(self, model_config: ModelConfig, content: MultimodalContent, query: Optional[str]) -> str:
+        """Process content via OpenRouter's OpenAI-compatible endpoint.
+        Images are sent as native vision input; other types are extracted to
+        text first (OpenRouter has no audio-transcription / native-PDF path)."""
+        client_kwargs, model_name = self.config.openai_client_args(model_config)
+        client = AsyncOpenAI(**client_kwargs)
+
+        message_content = []
+        if query:
+            message_content.append({"type": "text", "text": query})
+
+        if content.type == "image":
+            message_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{content.mime_type};base64,{content.get_base64()}"
+                }
+            })
+        else:
+            extracted = await self._extract_single_content(content)
+            message_content.append({"type": "text", "text": extracted})
+
+        response = await client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": message_content}],
+            temperature=self.config.temperature
+        )
+        return response.choices[0].message.content
             
     async def _process_native_gemini(self, content: MultimodalContent, query: Optional[str]) -> str:
         """Process using Gemini's native multimodal API with thinking mode"""
@@ -620,16 +661,22 @@ class MultimodalAgent:
         
     async def _extract_image_to_text(self, content: MultimodalContent) -> str:
         """Extract image to text description"""
-        # Use GPT-4o or Doubao for image description
+        # Use GPT-4o, Doubao, or (fallback) OpenRouter for image description
         if self.config.openai_api_key:
             client = AsyncOpenAI(api_key=self.config.openai_api_key)
             model = "gpt-4o"
-        else:
+        elif self.config.doubao_api_key:
             client = AsyncOpenAI(
                 api_key=self.config.doubao_api_key,
                 base_url=self.config.models["doubao-1.6"].base_url
             )
             model = "Doubao-1.6"
+        else:
+            client = AsyncOpenAI(
+                api_key=self.config.openrouter_api_key,
+                base_url=self.config.openrouter_base_url
+            )
+            model = _openrouter_model_id("gpt-4o")
             
         messages = [{
             "role": "user",
@@ -719,7 +766,18 @@ class MultimodalAgent:
         model_config = self.config.get_model_config(self.current_model)
         
         prompt = f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer:"
-        
+
+        # Universal OpenRouter fallback (primary provider key absent).
+        if self.config.use_openrouter(model_config.provider):
+            client_kwargs, model_name = self.config.openai_client_args(model_config)
+            client = AsyncOpenAI(**client_kwargs)
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.config.temperature
+            )
+            return response.choices[0].message.content
+
         if model_config.provider == Provider.GEMINI:
             client = genai.Client(api_key=self.config.gemini_api_key)
             
@@ -799,7 +857,11 @@ class MultimodalAgent:
             
     async def _stream_response(self, model_config: ModelConfig, multimodal_content: Optional[MultimodalContent] = None) -> AsyncGenerator[str, None]:
         """Stream response from the model"""
-        if model_config.provider == Provider.GEMINI:
+        # Universal OpenRouter fallback -> use the OpenAI-compatible stream path.
+        if self.config.use_openrouter(model_config.provider):
+            async for chunk in self._stream_openai_response(model_config):
+                yield chunk
+        elif model_config.provider == Provider.GEMINI:
             async for chunk in self._stream_gemini_response(multimodal_content):
                 yield chunk
         else:
@@ -913,21 +975,16 @@ class MultimodalAgent:
         self.add_message(Message(role="assistant", content=full_response))
         
     async def _stream_openai_response(self, model_config: ModelConfig) -> AsyncGenerator[str, None]:
-        """Stream response from OpenAI-compatible API"""
-        if model_config.provider == Provider.OPENAI:
-            client = AsyncOpenAI(api_key=self.config.openai_api_key)
-        else:  # Doubao
-            client = AsyncOpenAI(
-                api_key=self.config.doubao_api_key,
-                base_url=model_config.base_url
-            )
-            
+        """Stream response from OpenAI-compatible API (direct or via OpenRouter)"""
+        client_kwargs, model_name = self.config.openai_client_args(model_config)
+        client = AsyncOpenAI(**client_kwargs)
+
         # Convert conversation history to OpenAI format
         messages = [msg.to_dict() for msg in self.conversation_history]
-        
+
         # Add tools if enabled
         kwargs = {
-            "model": model_config.model_name,
+            "model": model_name,
             "messages": messages,
             "temperature": self.config.temperature,
             "stream": True

@@ -8,6 +8,29 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+def _openrouter_model_id(model) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins.
+    Vision-capable default (gpt-4o) so image analysis still works."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-4o"
+    if "/" in m:
+        return m
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    if ml.startswith("gemini"):
+        return "google/" + m  # e.g. gemini-2.5-pro -> google/gemini-2.5-pro
+    # Provider-native ids (doubao-*/qwen/...) -> a widely-available vision model.
+    return "openai/gpt-4o"
+
+
 class ExtractionMode(Enum):
     """Modes for multimodal content extraction"""
     NATIVE = "native"  # Use model's native multimodal capabilities
@@ -41,6 +64,12 @@ class Config:
         self.gemini_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
         self.doubao_api_key = os.getenv("DOUBAO_API_KEY") or os.getenv("ARK_API_KEY", "")
+
+        # Universal OpenRouter fallback: when a model's own provider key is
+        # missing but OPENROUTER_API_KEY is present, route that model through
+        # OpenRouter's OpenAI-compatible endpoint.
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.openrouter_base_url = "https://openrouter.ai/api/v1"
         
         # Model configurations
         self.models = {
@@ -99,5 +128,35 @@ class Config:
         return {
             "gemini": bool(self.gemini_api_key),
             "openai": bool(self.openai_api_key),
-            "doubao": bool(self.doubao_api_key)
+            "doubao": bool(self.doubao_api_key),
+            "openrouter": bool(self.openrouter_api_key)
         }
+
+    def has_provider_key(self, provider: 'Provider') -> bool:
+        """Whether the direct API key for a provider is configured."""
+        if provider == Provider.OPENAI:
+            return bool(self.openai_api_key)
+        if provider == Provider.DOUBAO:
+            return bool(self.doubao_api_key)
+        if provider == Provider.GEMINI:
+            return bool(self.gemini_api_key)
+        return False
+
+    def use_openrouter(self, provider: 'Provider') -> bool:
+        """True when a model's own provider key is missing but OpenRouter is
+        available -> the call should be routed through OpenRouter."""
+        return (not self.has_provider_key(provider)) and bool(self.openrouter_api_key)
+
+    def openai_client_args(self, model_config: 'ModelConfig'):
+        """Return (client_kwargs, model_name) for an OpenAI-compatible call,
+        applying the universal OpenRouter fallback when needed."""
+        provider = model_config.provider
+        if self.use_openrouter(provider):
+            return (
+                {"api_key": self.openrouter_api_key, "base_url": self.openrouter_base_url},
+                _openrouter_model_id(model_config.model_name),
+            )
+        if provider == Provider.DOUBAO:
+            return {"api_key": self.doubao_api_key, "base_url": model_config.base_url}, model_config.model_name
+        # OPENAI (and any GEMINI forced through the OpenAI-compatible path)
+        return {"api_key": self.openai_api_key}, model_config.model_name

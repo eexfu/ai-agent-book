@@ -15,6 +15,27 @@ def _reasoning_safe_temperature(model, requested=1.0):
     return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
 
 
+def _openrouter_model_id(model: Optional[str]) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-4o-mini"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-4o)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-4o-mini"
+
+
 class Provider(str, Enum):
     """Supported LLM providers"""
     SILICONFLOW = "siliconflow"
@@ -101,10 +122,18 @@ class LLMConfig:
         api_key = self.api_key or os.getenv(f"{provider.upper()}_API_KEY")
         if not api_key and provider == "moonshot":
             api_key = os.getenv("KIMI_API_KEY")  # Fallback for moonshot
-        
+
         # Determine model
         model = self.model or defaults.get("model", "gpt-4o")
-        
+
+        # Universal OpenRouter fallback: primary provider key absent but
+        # OPENROUTER_API_KEY present -> route through OpenRouter.
+        if not api_key and provider != "openrouter" and os.getenv("OPENROUTER_API_KEY"):
+            return {
+                "api_key": os.getenv("OPENROUTER_API_KEY"),
+                "base_url": "https://openrouter.ai/api/v1",
+            }, _openrouter_model_id(model)
+
         # Build client config
         client_config = {"api_key": api_key}
         

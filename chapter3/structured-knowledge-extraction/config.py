@@ -16,17 +16,54 @@ try:
 except Exception:  # pragma: no cover - dotenv 是可选依赖
     pass
 
+def _openrouter_model_id(model) -> str:
+    """将供应商原生模型名映射为 OpenRouter 模型 id（通用 OpenRouter 回退用）。
+    显式的 OPENROUTER_MODEL 环境变量优先。"""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-4o-mini"
+    if "/" in m:
+        return m
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    return "openai/gpt-4o-mini"
+
+
 # 默认模型，可用环境变量覆盖
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+# 通用 OpenRouter 回退：若没有 OPENAI_API_KEY 但设置了 OPENROUTER_API_KEY，
+# 则把聊天模型路由到 OpenRouter，并把模型名映射为 OpenRouter 的 id。
+_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+_OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+_USE_OPENROUTER = (not _OPENAI_API_KEY) and bool(_OPENROUTER_API_KEY)
+if _USE_OPENROUTER:
+    MODEL = _openrouter_model_id(MODEL)
+
 
 def get_client() -> OpenAI:
-    """返回一个配置好的 OpenAI 客户端（仅使用官方端点，读取 OPENAI_API_KEY）。"""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "未找到 OPENAI_API_KEY，请先 `cp env.example .env` 并填入你的 OpenAI Key。"
-        )
+    """返回一个配置好的 OpenAI 客户端。
+
+    优先使用官方端点（读取 OPENAI_API_KEY）；若缺失则在存在 OPENROUTER_API_KEY 时
+    回退到 OpenRouter（OpenAI 兼容端点）。"""
     # timeout + 自动重试：发现/抽取阶段要连续发几十次请求，单次瞬时错误
     # （网络抖动 / 限流 / 5xx）不应中断整条流水线。
-    return OpenAI(api_key=api_key, timeout=60.0, max_retries=5)
+    if _OPENAI_API_KEY:
+        return OpenAI(api_key=_OPENAI_API_KEY, timeout=60.0, max_retries=5)
+    if _OPENROUTER_API_KEY:
+        return OpenAI(
+            api_key=_OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            timeout=60.0,
+            max_retries=5,
+        )
+    raise RuntimeError(
+        "未找到 OPENAI_API_KEY 或 OPENROUTER_API_KEY，请先 `cp env.example .env` "
+        "并填入你的 OpenAI Key（或 OpenRouter Key 作为回退）。"
+    )

@@ -345,3 +345,14 @@ This project is part of the AI Agent training curriculum and is intended for edu
 - `week2/user-memory-evaluation`: Evaluation framework
 - `week3/agentic-rag`: Original agentic RAG implementation
 - `week3/contextual-retrieval`: Advanced retrieval techniques
+
+
+## OpenRouter 通用回退 / Universal OpenRouter fallback
+
+This experiment now supports a **universal OpenRouter fallback** for its chat LLM.
+
+- If the primary provider key (e.g. `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `OPENAI_API_KEY` / `DOUBAO_API_KEY` …) is present, behavior is unchanged.
+- Else if `OPENROUTER_API_KEY` is set, the chat LLM is automatically routed through OpenRouter (`https://openrouter.ai/api/v1`). Model names are mapped automatically: `gpt-*`/`o1-*` → `openai/…`, `claude-*` → `anthropic/claude-opus-4.8`, ids already containing `/` are kept as-is, and other provider-native ids (e.g. `kimi-k3`, `doubao-*`) fall back to `openai/gpt-4o-mini`. Set `OPENROUTER_MODEL` to force a specific OpenRouter model id.
+- Else a clear error lists the accepted keys.
+
+Add `OPENROUTER_API_KEY=...` to your `.env` (see `env.example`) to enable it.
