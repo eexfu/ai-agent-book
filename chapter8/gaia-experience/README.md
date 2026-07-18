@@ -148,7 +148,9 @@ See [A/B 对照实验](#-ab-对照实验reproduce-the-experiments-point) for the
 | `--start` | Start index of dataset | 0 |
 | `--end` | End index of dataset | 20 |
 | `--q` | Specific task ID to run | None |
+| `--skip` | Skip tasks already present in the results file | False |
 | `--split` | Dataset split (validation/test) | validation |
+| `--blacklist_file_path` | Optional file of task_ids to skip | None |
 
 ### Demo Script
 

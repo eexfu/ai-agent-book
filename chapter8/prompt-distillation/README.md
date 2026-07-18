@@ -454,8 +454,8 @@ This implementation closely follows the tinker cookbook methodology with a key e
 **Same:**
 - Teacher model: Qwen3-30B-A3B-Thinking (same as tinker)
 - LoRA configuration: rank 32, alpha 16
-- Learning rate: 1e-4
-- Training epochs: 4
+- Learning rate: 2e-4
+- Training epochs: 1
 - Temperature: 0.15 (data generation)
 - Prompt: Identical language classification prompt
 
@@ -465,7 +465,7 @@ This implementation closely follows the tinker cookbook methodology with a key e
   - Same model size, but direct responses without reasoning tokens
   - 20-30x faster than thinking model in production
 - **Framework**: TRL (more accessible than tinker's internal framework)
-- **Max length**: 4096 (student doesn't need long context)
+- **Max length**: 2048 (student doesn't need long context)
 
 **Why This Is Better:**
 - Original tinker approach: Distill prompt only

@@ -58,7 +58,7 @@ pip install -r requirements.txt
 playwright install chromium
 
 # 3. 配置环境变量
-cp .env.example .env
+cp env.example .env
 # 编辑.env文件，添加你的API密钥
 ```
 
