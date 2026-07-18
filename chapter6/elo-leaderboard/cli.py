@@ -322,6 +322,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     except (RuntimeError, FileNotFoundError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         sys.exit(1)
+    except Exception as exc:  # 例如无效 ANTHROPIC_API_KEY 触发的 anthropic.AuthenticationError
+        print(f"错误：{type(exc).__name__}: {exc}", file=sys.stderr)
+        print("（若为 LLM 评审路径，请检查对应 provider 的 API key 是否有效）", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

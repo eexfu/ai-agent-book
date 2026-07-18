@@ -61,7 +61,8 @@ def synthesize(cfg: config.TTSConfig, text: str, out_path: str) -> None:
 
 
 def _require_env(name: str) -> str:
-    val = os.environ.get(name, "").strip()
+    # 走 config.env_get 以支持环境变量别名（如 Fish 的 FISH_API_KEY / FISHAUDIO_API_KEY）。
+    val = config.env_get(name)
     if not val:
         raise RuntimeError(f"缺少环境变量 {name}，无法用该 provider 合成。")
     return val
@@ -101,7 +102,7 @@ def _synth_elevenlabs(cfg: config.TTSConfig, text: str) -> bytes:
 
 
 def _synth_fishaudio(cfg: config.TTSConfig, text: str) -> bytes:
-    key = _require_env("FISHAUDIO_API_KEY")
+    key = _require_env("FISH_API_KEY")
     body = {"text": text, "format": "mp3"}
     if cfg.voice:
         body["reference_id"] = cfg.voice
@@ -336,12 +337,14 @@ def _resolve_gemini_model(api_key: str) -> str:
             data = json.loads(r.read())
         names = [m["name"].split("/")[-1] for m in data.get("models", [])
                  if "generateContent" in m.get("supportedGenerationMethods", [])]
-        for want in (config.GEMINI_MODEL_DEFAULT, "gemini-flash-latest", "gemini-2.5-pro"):
+        # 优先书中方案的 gemini-2.5-pro，再退到 flash 系列。
+        for want in (config.GEMINI_MODEL_DEFAULT, "gemini-2.5-pro",
+                     "gemini-2.5-flash", "gemini-flash-latest"):
             if want in names:
                 return want
-        # 退而求其次：任意 flash 模型
+        # 退而求其次：任意非 tts/image 的可用模型
         for n in names:
-            if "flash" in n and "tts" not in n and "image" not in n:
+            if "tts" not in n and "image" not in n and "embedding" not in n:
                 return n
     except Exception:
         pass

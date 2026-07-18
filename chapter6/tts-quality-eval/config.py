@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 WHISPER_MODEL = "whisper-1"        # 语音转写（回译），用于计算 WER/字准确率
 JUDGE_MODEL = "gpt-4o-mini"        # LLM Rubric 评审模型
 
-# 可选的 Gemini 音频评审（书中方案）。默认模型名会过期，这里用当前可用的名字，
-# 并在运行时通过 REST /models 探测校正。仅当 --gemini 开启时才会用到。
-GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
+# 可选的 Gemini 音频评审（书中方案，书中用 Gemini 2.5 Pro）。模型名可能随时间过期，
+# 运行时会通过 REST /models 探测校正。仅当 --gemini 开启时才会用到。
+GEMINI_MODEL_DEFAULT = "gemini-2.5-pro"
 
 # 计费单价（美元），仅用于打印粗略成本，不影响评分。数值随官方调整可能变化。
 PRICE = {
@@ -55,6 +55,22 @@ class TTSConfig:
 # 横向对比。除 OpenAI 外均按各家公开 REST 接口实现，缺 key 时该 provider 的行会被
 # 记为失败而不影响整表（见 demo.py）。
 # ---------------------------------------------------------------------------
+# 环境变量别名：同一凭据可能有多个历史/惯用名，任意一个被设置即视为已配置。
+ENV_ALIASES = {
+    "FISH_API_KEY": ("FISH_API_KEY", "FISHAUDIO_API_KEY"),
+}
+
+
+def env_get(name: str) -> str:
+    """读取环境变量，支持 ENV_ALIASES 中登记的别名，返回第一个非空值（已 strip）。"""
+    import os
+    for n in ENV_ALIASES.get(name, (name,)):
+        val = os.environ.get(n, "").strip()
+        if val:
+            return val
+    return ""
+
+
 @dataclass
 class ProviderInfo:
     key: str                # 内部标识（--providers 用）
@@ -63,8 +79,7 @@ class ProviderInfo:
     note: str               # 一句话说明 voice 字段语义等
 
     def configured(self) -> bool:
-        import os
-        return all(os.environ.get(e, "").strip() for e in self.env)
+        return all(env_get(e) for e in self.env)
 
 
 PROVIDERS = {
@@ -77,8 +92,8 @@ PROVIDERS = {
         "voice=voice_id，model 默认 eleven_multilingual_v2（多语言/中文）。",
     ),
     "fishaudio": ProviderInfo(
-        "fishaudio", "Fish Audio", ("FISHAUDIO_API_KEY",),
-        "voice=reference_id（留空用默认音色），走 /v1/tts。",
+        "fishaudio", "Fish Audio", ("FISH_API_KEY",),
+        "voice=reference_id（留空用默认音色），走 /v1/tts；key 亦可用别名 FISHAUDIO_API_KEY。",
     ),
     "minimax": ProviderInfo(
         "minimax", "Minimax", ("MINIMAX_API_KEY", "MINIMAX_GROUP_ID"),

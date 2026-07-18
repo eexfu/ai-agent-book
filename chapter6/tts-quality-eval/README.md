@@ -39,7 +39,7 @@
   |----------|----------|-----------|
   | `openai` | `OPENAI_API_KEY` | alloy/nova…；model=tts-1 / tts-1-hd / gpt-4o-mini-tts |
   | `elevenlabs` | `ELEVENLABS_API_KEY` | voice_id；model 默认 eleven_multilingual_v2 |
-  | `fishaudio` | `FISHAUDIO_API_KEY` | reference_id（留空用默认音色） |
+  | `fishaudio` | `FISH_API_KEY`（别名 `FISHAUDIO_API_KEY`） | reference_id（留空用默认音色） |
   | `minimax` | `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID` | voice_id；model 默认 speech-01-turbo |
   | `doubao` | `DOUBAO_APP_ID` + `DOUBAO_ACCESS_TOKEN` | voice_type（火山引擎） |
 
@@ -50,8 +50,9 @@
   语音回译成文本算 CER，再用 `gpt-4o-mini` 基于「转写文本 + 时长 + 语速 + CER」按 Rubric
   打分。转写时用简体中文提示语引导 Whisper 输出简体，避免繁体字形差异虚高 CER。
 - **质量评审（可选，书中方案）**：`--gemini` 让 **Gemini 多模态直接「听」音频**打分
-  （原文 + 音频 + Rubric 一起输入），需 `GEMINI_API_KEY`。默认 Gemini 模型名会过期，
-  代码会先探测 `/models` 选一个当前可用的（如 `gemini-2.5-flash`）。
+  （原文 + 音频 + Rubric 一起输入），需 `GEMINI_API_KEY`。默认模型为书中方案的
+  `gemini-2.5-pro`；代码会先探测 `/models`，若该名不可用再自动回退到当前可用模型
+  （如 `gemini-2.5-flash`）。
 
 > 书中用 Gemini 2.5 Pro 直接听合成语音打分；本 demo 默认改用「Whisper 回译 + LLM
 > Rubric」以便**零额外配置即可跑通**，同时保留 `--gemini` 开关复现书中方案。两者的
