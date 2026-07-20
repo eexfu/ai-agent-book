@@ -49,6 +49,8 @@ EDIT_TOOLS = [
 
 def _apply_one(content: str, old_str: str, new_str: str) -> tuple[str, str | None]:
     """尝试应用一条编辑。成功返回(新内容, None)，失败返回(原内容, 错误信息)。"""
+    if old_str is None or new_str is None:
+        return content, "old_str/new_str 不能为 null"
     count = content.count(old_str)
     if count == 0:
         return content, f"old_str 在文件中未找到：{old_str[:60]!r}"
