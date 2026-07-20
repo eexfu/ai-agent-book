@@ -132,10 +132,22 @@ def compare(
         student_input_total += s_tok
         per_text_tokens.append((t_tok, s_tok))
 
-    teacher_avg = teacher_input_total / n
-    student_avg = student_input_total / n
-    reduction_pct = 100.0 * (1 - student_input_total / teacher_input_total)
-    ratio = teacher_input_total / student_input_total if student_input_total else float("inf")
+    if n == 0:
+        teacher_avg = student_avg = reduction_pct = 0.0
+        ratio = float("inf")
+    else:
+        teacher_avg = teacher_input_total / n
+        student_avg = student_input_total / n
+        reduction_pct = (
+            100.0 * (1 - student_input_total / teacher_input_total)
+            if teacher_input_total
+            else 0.0
+        )
+        ratio = (
+            teacher_input_total / student_input_total
+            if student_input_total
+            else float("inf")
+        )
 
     # 学生预测（与 test_file 逐行对齐）
     student_preds: Optional[List[Optional[str]]] = None
