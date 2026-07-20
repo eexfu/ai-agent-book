@@ -86,7 +86,7 @@ async def browser_navigate(url: str, new_tab: bool = False) -> Dict[str, Any]:
         return {
             "success": True,
             "url": url,
-            "title": page.title if hasattr(page, 'title') else "N/A",
+            "title": await page.title() if hasattr(page, 'title') else "N/A",
             "message": f"Successfully navigated to {url}"
         }
         
@@ -120,7 +120,7 @@ async def browser_get_content(selector: Optional[str] = None) -> Dict[str, Any]:
                 try:
                     text = await elem.get_text()
                     content.append(text)
-                except:
+                except Exception:
                     pass
             
             return {
@@ -264,7 +264,7 @@ async def browser_list_tabs() -> Dict[str, Any]:
             tabs.append({
                 "index": idx,
                 "url": page.url if hasattr(page, 'url') else "N/A",
-                "title": page.title if hasattr(page, 'title') else "N/A"
+                "title": await page.title() if hasattr(page, 'title') else "N/A"
             })
         
         return {
