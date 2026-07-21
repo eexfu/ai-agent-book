@@ -115,9 +115,9 @@ def test_match_counting():
     """Test that match and win counts are tracked correctly."""
     elo = EloRatingSystem(initial_rating=1000.0, k_factor=32.0)
     
-    elo.update_ratings("model_a", "model_b", "model_a")
-    elo.update_ratings("model_a", "model_c", "model_c")
-    elo.update_ratings("model_a", "model_b", "tie")
+    elo.update_ratings("model_a", "model_b", "model_a")  # model_a wins
+    elo.update_ratings("model_a", "model_c", "model_b")  # model_a loses (2nd slot wins)
+    elo.update_ratings("model_a", "model_b", "tie")      # tie -> 0.5 each
     
     # model_a played 3 matches
     assert elo.match_counts["model_a"] == 3

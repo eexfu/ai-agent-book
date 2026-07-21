@@ -7,9 +7,10 @@ import os
 import sys
 import json
 import time
+import argparse
 import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from agent import ResearchAgent
 from compression_strategies import CompressionStrategy, ContextCompressor
@@ -18,6 +19,19 @@ from colorama import init, Fore, Style
 
 # Initialize colorama
 init(autoreset=True)
+
+
+# Short CLI aliases -> compression strategy (order matches the book's 实验 2-9)
+STRATEGY_CHOICES = {
+    "no_compression": CompressionStrategy.NO_COMPRESSION,
+    "individual": CompressionStrategy.NON_CONTEXT_AWARE_INDIVIDUAL,
+    "combined": CompressionStrategy.NON_CONTEXT_AWARE_COMBINED,
+    "context_aware": CompressionStrategy.CONTEXT_AWARE,
+    "citations": CompressionStrategy.CONTEXT_AWARE_CITATIONS,
+    "windowed": CompressionStrategy.WINDOWED_CONTEXT,
+}
+
+ALL_STRATEGIES = list(STRATEGY_CHOICES.values())
 
 class StrategyRunner:
     """Runs all compression strategies and logs results"""
@@ -240,17 +254,11 @@ class StrategyRunner:
         result['end_time'] = datetime.now().isoformat()
         return result
     
-    def run_all_strategies(self):
-        """Run all compression strategies"""
-        strategies = [
-            CompressionStrategy.NO_COMPRESSION,
-            CompressionStrategy.NON_CONTEXT_AWARE_INDIVIDUAL,
-            CompressionStrategy.NON_CONTEXT_AWARE_COMBINED,
-            CompressionStrategy.CONTEXT_AWARE,
-            CompressionStrategy.CONTEXT_AWARE_CITATIONS,
-            CompressionStrategy.WINDOWED_CONTEXT
-        ]
-        
+    def run_all_strategies(self, strategies: Optional[List[CompressionStrategy]] = None):
+        """Run the given compression strategies (default: all six)"""
+        if strategies is None:
+            strategies = list(ALL_STRATEGIES)
+
         self.log_banner("COMPRESSION STRATEGIES TEST RUN", char="=")
         self.logger.info(f"Testing {len(strategies)} strategies")
         self.logger.info(f"Log file: {self.log_file}")
@@ -350,12 +358,68 @@ class StrategyRunner:
             self.logger.error(f"Failed to save JSON results: {e}")
 
 
+def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器"""
+    parser = argparse.ArgumentParser(
+        prog="run_all_strategies.py",
+        description="逐个运行压缩策略并将完整过程（含流式压缩摘要）写入日志。\n"
+                    "与 experiment.py 相比，本脚本侧重“可复盘的详细日志”：每次运行都会生成 "
+                    ".log 文本日志和 .json 结果文件，便于逐轮检查压缩效果。",
+        epilog="示例：\n"
+               "  python run_all_strategies.py                     # 运行全部 6 种策略\n"
+               "  python run_all_strategies.py -s windowed         # 只跑自适应窗口化策略\n"
+               "  python run_all_strategies.py --model kimi-k3 --log-dir logs/k2\n"
+               "  python run_all_strategies.py --list-strategies",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-s", "--strategy", nargs="+", choices=list(STRATEGY_CHOICES.keys()), metavar="NAME",
+        help="要运行的压缩策略（可指定多个，默认运行全部 6 种）。可选值："
+             + ", ".join(STRATEGY_CHOICES.keys()),
+    )
+    parser.add_argument(
+        "-m", "--model", default=None,
+        help=f"覆盖使用的模型名称（默认读取环境变量 MODEL_NAME，当前为 {Config.MODEL_NAME}）",
+    )
+    parser.add_argument(
+        "--log-dir", default="logs", metavar="DIR",
+        help="日志与 JSON 结果的输出目录（默认 logs/）",
+    )
+    parser.add_argument(
+        "-n", "--max-iterations", type=int, default=None, metavar="N",
+        help=f"每个策略允许的最大迭代（工具调用轮数），默认 {Config.MAX_ITERATIONS}",
+    )
+    parser.add_argument(
+        "--list-strategies", action="store_true",
+        help="列出所有可选的压缩策略名称后退出",
+    )
+    return parser
+
+
 def main():
     """Main entry point"""
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.list_strategies:
+        print("可选的压缩策略（--strategy 的取值）：")
+        for alias, strat in STRATEGY_CHOICES.items():
+            print(f"  {alias:<16} -> {strat.value}")
+        return
+
+    # Apply CLI overrides onto the shared Config
+    if args.model:
+        Config.MODEL_NAME = args.model
+    if args.max_iterations is not None:
+        Config.MAX_ITERATIONS = args.max_iterations
+
+    strategies = ([STRATEGY_CHOICES[name] for name in args.strategy]
+                  if args.strategy else list(ALL_STRATEGIES))
+
     print(f"\n{Fore.CYAN}{'='*70}")
     print(f"{Fore.CYAN}COMPRESSION STRATEGIES AUTOMATED TEST RUNNER")
     print(f"{Fore.CYAN}{'='*70}{Style.RESET_ALL}\n")
-    
+
     # Validate configuration
     if not Config.validate():
         print(f"{Fore.RED}Configuration validation failed!{Style.RESET_ALL}")
@@ -363,18 +427,18 @@ def main():
         print("  MOONSHOT_API_KEY=your_api_key_here")
         print("  SERPER_API_KEY=your_api_key_here (optional)")
         sys.exit(1)
-    
+
     # Create directories
     Config.create_directories()
-    
+
     # Run all strategies
-    runner = StrategyRunner()
-    
+    runner = StrategyRunner(log_dir=args.log_dir)
+
     try:
         print(f"{Fore.YELLOW}Starting test run...{Style.RESET_ALL}")
         print(f"Log file: {runner.log_file}\n")
-        
-        runner.run_all_strategies()
+
+        runner.run_all_strategies(strategies)
         
         print(f"\n{Fore.GREEN}✅ Test run complete!{Style.RESET_ALL}")
         print(f"\nResults saved to:")

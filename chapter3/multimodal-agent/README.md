@@ -46,7 +46,7 @@ MultimodalAgent
 
 1. Clone the repository and navigate to the project directory:
 ```bash
-cd projects/week3/multimodal-agent
+cd chapter3/multimodal-agent
 ```
 
 2. Install dependencies:
@@ -64,6 +64,31 @@ cp env.example .env
 ```bash
 export $(cat .env | xargs)
 ```
+
+## Quick Offline Start (No API Key)
+
+Generate a bundled multimodal sample — a chart-bearing report — so you can run
+Experiment 3-7 end to end. The exact quarterly figures live **only in the chart's
+bars**, not in the surrounding text, which is what makes the three-paradigm
+trade-off measurable.
+
+```bash
+# Offline: creates test_files/sample_chart.png and test_files/sample_report.pdf
+python create_sample.py           # or: python demo.py --generate-sample
+```
+
+Then compare the three extraction paradigms on the same file + question
+(requires a vision API key such as OpenAI or Gemini):
+
+```bash
+python demo.py \
+  --file test_files/sample_chart.png \
+  --query "Which quarter had the highest revenue, and what was the exact value?" \
+  --model gpt-5.6-luna
+```
+
+All CLIs expose a Chinese `--help` (`python demo.py --help`,
+`python main.py --help`, `python create_sample.py --help`).
 
 ## Usage
 
@@ -109,7 +134,7 @@ from config import ExtractionMode
 async def example():
     # Initialize agent
     agent = MultimodalAgent(
-        model="gemini-2.5-pro",
+        model="gemini-3.5-flash",
         mode=ExtractionMode.NATIVE,
         enable_tools=True
     )
@@ -140,15 +165,34 @@ asyncio.run(example())
 Run the comprehensive comparison demo:
 
 ```bash
-# Compare extraction modes for a specific file
+# Compare extraction modes for a specific file (flags form)
+python demo.py --file document.pdf --query "What are the key findings?" --model gpt-5.6-luna
+
+# Backward-compatible positional form still works
 python demo.py document.pdf "What are the key findings?"
+
+# Save the full transcript, and skip the cross-model pass
+python demo.py --file test_files/sample_chart.png \
+  --query "Which quarter had the highest revenue?" \
+  --model gpt-5.6-luna --skip-model-comparison --output result.txt
 
 # This will run:
 # 1. Native multimodal mode
 # 2. Extract to text mode
 # 3. Extract to text with tools
-# 4. Comparison across different models
+# 4. Comparison across different models (unless --skip-model-comparison)
 ```
+
+Demo CLI flags:
+
+| Flag | Description |
+|------|-------------|
+| `--file` / positional `file` | Multimodal file to process (image / PDF / audio) |
+| `--query` / positional `query` | Question to ask about the file |
+| `--model` | Model for native/extract modes (default: `gemini-3.5-flash`) |
+| `--skip-model-comparison` | Only run the three-paradigm comparison |
+| `--generate-sample` | Offline: create the bundled chart sample, then exit |
+| `--output`, `-o` | Also write the full transcript to a file |
 
 ### Mode Comparison
 
@@ -186,7 +230,7 @@ python demo.py document.pdf "What are the key findings?"
 
 1. **Google Gemini**: Required for PDF/Audio native processing
    - Get key at: https://makersuite.google.com/app/apikey
-   - Set: `GOOGLE_API_KEY`
+   - Set: `GOOGLE_API_KEY` (or `GEMINI_API_KEY` — both are read)
 
 2. **OpenAI**: Required for GPT models and Whisper
    - Get key at: https://platform.openai.com/api-keys
@@ -194,7 +238,7 @@ python demo.py document.pdf "What are the key findings?"
 
 3. **Doubao**: Required for Doubao model
    - Get key at: https://console.volcengine.com/
-   - Set: `DOUBAO_API_KEY`
+   - Set: `DOUBAO_API_KEY` (or `ARK_API_KEY` — both are read)
 
 ### File Size Limits
 - PDF: 20MB
@@ -216,7 +260,7 @@ python test_multimodal.py
 ```python
 # Native mode for best understanding
 agent = MultimodalAgent(
-    model="gemini-2.5-pro",
+    model="gemini-3.5-flash",
     mode=ExtractionMode.NATIVE
 )
 
@@ -232,7 +276,7 @@ summary = await agent.process_multimodal_content(
 ```python
 # Extract to text with tools for follow-up questions
 agent = MultimodalAgent(
-    model="gpt-4o",
+    model="gpt-5.6-luna",
     mode=ExtractionMode.EXTRACT_TO_TEXT,
     enable_tools=True
 )
@@ -250,7 +294,7 @@ await agent.chat("What's the color scheme?")
 ```python
 # Using Whisper for transcription
 agent = MultimodalAgent(
-    model="gpt-4o",
+    model="gpt-5.6-luna",
     mode=ExtractionMode.EXTRACT_TO_TEXT
 )
 
@@ -356,3 +400,16 @@ This is an educational project demonstrating multimodal AI capabilities. Contrib
 ## License
 
 MIT License - See LICENSE file for details
+
+
+## OpenRouter 通用回退 / Universal OpenRouter fallback
+
+This experiment now supports a **universal OpenRouter fallback** for its chat LLM.
+
+- If the primary provider key (e.g. `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `OPENAI_API_KEY` / `DOUBAO_API_KEY` …) is present, behavior is unchanged.
+- Else if `OPENROUTER_API_KEY` is set, the chat LLM is automatically routed through OpenRouter (`https://openrouter.ai/api/v1`). Model names are mapped automatically: `gpt-*`/`o1-*` → `openai/…`, `claude-*` → `anthropic/claude-opus-4.8`, ids already containing `/` are kept as-is, and other provider-native ids (e.g. `kimi-k3`, `doubao-*`) fall back to `openai/gpt-5.6-luna`. Set `OPENROUTER_MODEL` to force a specific OpenRouter model id.
+- Else a clear error lists the accepted keys.
+
+Add `OPENROUTER_API_KEY=...` to your `.env` (see `env.example`) to enable it.
+
+> Note: image analysis and text chat route through OpenRouter (vision-capable default `openai/gpt-5.6-luna`). Audio transcription (Whisper) and native-PDF extraction still require a direct OpenAI/Gemini key.

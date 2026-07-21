@@ -2,6 +2,8 @@
 
 A real-time voice chat demo featuring speech-to-text, AI conversation, and text-to-speech capabilities. The application supports multiple AI service providers and provides a seamless conversational experience with minimal latency.
 
+> This is the companion code for **实验 9-1「构建传统语音 Agent」** in 《深入理解 AI Agent》第 9 章. It implements the **cascaded** voice pipeline (VAD → ASR → LLM → TTS) discussed there: the frontend captures the microphone and streams audio over a WebSocket; the backend runs Silero VAD to detect end-of-speech (~500 ms of silence), then routes the utterance through pluggable ASR, LLM, and TTS providers and streams synthesized audio back for playback.
+
 ## Features
 
 - 🎤 Real-time voice input with Voice Activity Detection (VAD)
@@ -25,7 +27,7 @@ A real-time voice chat demo featuring speech-to-text, AI conversation, and text-
 - **ARK Doubao**: Low latency in China, optimized for Chinese language
 
 ### TTS (Text-to-Speech)
-- **Fish Audio** (via Siliconflow): Natural voice synthesis, multiple voices
+- **CosyVoice2** (via Siliconflow): Natural voice synthesis, multiple system voices
 
 ## Architecture Overview
 
@@ -47,6 +49,15 @@ The system consists of a frontend-backend architecture with real-time audio proc
 ```
 User Speech → WebSocket → Backend VAD → Multi-Provider STT → Multi-Provider LLM → TTS → Audio Response
 ```
+
+### Ports
+
+| Component | Port | Notes |
+|-----------|------|-------|
+| Backend (WebSocket server) | **8848** | Set by `LISTEN_PORT` in `backend/config.js`. The frontend connects to `ws://localhost:8848`. |
+| Frontend (Next.js dev server) | **3000** | Open http://localhost:3000 in the browser. |
+
+The frontend learns the backend port from the `WEBSOCKET_PORT` environment variable (see `frontend/.env.example`). It must match the backend's `LISTEN_PORT`.
 
 ## Prerequisites
 
@@ -91,7 +102,7 @@ sudo apt install ffmpeg
 - tests/
   - provider-tests.js: Comprehensive provider testing
 - run-tests.js: Test runner with environment validation
-- PROVIDER_GUIDE.md: Detailed provider configuration guide
+- utils/providers/: Provider configuration (ASR / LLM / TTS)
 - package.json: Backend dependencies and scripts
 ```
 
@@ -118,11 +129,23 @@ sudo apt install ffmpeg
    ```bash
    cd frontend && npm install
    ```
-4. Download the Silero VAD model:
+4. Download the Silero VAD model (already included in this repo at `backend/models/silero_vad.onnx`; only needed if missing):
    ```bash
    cd backend/models
    wget https://huggingface.co/deepghs/silero-vad-onnx/resolve/main/silero_vad.onnx
    ```
+5. Configure the frontend's WebSocket port (defaults to 8848 if omitted):
+   ```bash
+   cd frontend && cp .env.example .env   # sets WEBSOCKET_PORT=8848 to match the backend
+   ```
+
+After installing, verify your environment (Node version, FFmpeg, VAD model, provider keys) without needing a microphone or browser:
+
+```bash
+cd backend && npm run check    # or: node check-setup.js
+```
+
+This prints which prerequisites are satisfied and which selected providers have their API keys set. It exits non-zero only if a hard prerequisite (Node < 16, missing FFmpeg, or missing VAD model) is absent.
 
 ## Configuration
 
@@ -153,7 +176,7 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
 
 ### 2. Provider Selection
 
-1. Copy the example configuration file:
+1. This repo already ships a ready-to-edit `backend/config.js`. If it is missing (e.g. a fresh checkout that ignores it), copy the example first:
    ```bash
    cp backend/config.js.example backend/config.js
    ```
@@ -162,9 +185,9 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
    ```javascript
    const config = {
      // Provider Selection - Choose your preferred providers
-     ASR_PROVIDER: 'siliconflow',      // 'openai' or 'siliconflow'
-     LLM_PROVIDER: 'ark',              // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
-     TTS_PROVIDER: 'siliconflow',      // 'siliconflow' (Fish Audio)
+     ASR_PROVIDER: 'siliconflow',      // 'openai' (whisper-1) or 'siliconflow' (SenseVoice)
+     LLM_PROVIDER: 'openrouter',       // 'openrouter' (gpt-5.6-luna, default), 'openai', 'openrouter-gemini', 'ark'
+     TTS_PROVIDER: 'siliconflow',      // 'siliconflow' (CosyVoice2)
      
      // API Keys (loaded from environment variables)
      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -178,25 +201,25 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
 
 ### 3. Recommended Provider Combinations
 
-#### For Real-time Performance (Low Latency in China)
+#### Default / Recommended (works anywhere with an OpenRouter key)
 ```javascript
-ASR_PROVIDER: 'siliconflow',      // 'openai' or 'siliconflow'
-LLM_PROVIDER: 'ark',              // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
-TTS_PROVIDER: 'siliconflow',      // 'siliconflow' (Fish Audio)
+ASR_PROVIDER: 'siliconflow',      // SenseVoice
+LLM_PROVIDER: 'openrouter',       // openai/gpt-5.6-luna via OpenRouter (avoids gpt-5.6* org verification)
+TTS_PROVIDER: 'siliconflow',      // CosyVoice2
 ```
 
-#### For Real-time Performance (Low Latency in US)
+#### For Real-time Performance (Low Latency in China)
 ```javascript
-ASR_PROVIDER: 'openai',            // 'openai' or 'siliconflow'
-LLM_PROVIDER: 'openrouter-gemini', // 'openai', 'openrouter-gpt4o', 'openrouter-gemini', 'ark'
-TTS_PROVIDER: 'siliconflow',       // 'siliconflow' (Fish Audio)
+ASR_PROVIDER: 'siliconflow',      // SenseVoice
+LLM_PROVIDER: 'ark',              // Doubao (fast in China); or 'openrouter' for gpt-5.6-luna
+TTS_PROVIDER: 'siliconflow',      // CosyVoice2
 ```
 
 #### For Best Accuracy
 ```javascript
 ASR_PROVIDER: 'openai',           // Accurate Whisper
-LLM_PROVIDER: 'openrouter-gpt4o', // High-quality GPT-4o
-TTS_PROVIDER: 'siliconflow'       // Fish Audio
+LLM_PROVIDER: 'openrouter',       // openai/gpt-5.6-luna via OpenRouter
+TTS_PROVIDER: 'siliconflow'       // CosyVoice2
 ```
 
 ### 4. API Key Requirements
@@ -205,10 +228,10 @@ You only need the API keys for the providers you plan to use:
 
 | Provider | ASR | LLM | TTS | Required API Key |
 |----------|-----|-----|-----|------------------|
-| OpenAI | ✅ Whisper | ✅ GPT-4o | ❌ | `OPENAI_API_KEY` |
-| OpenRouter | ❌ | ✅ GPT-4o, Gemini | ❌ | `OPENROUTER_API_KEY` |
+| OpenAI | ✅ Whisper | ✅ gpt-5.6-luna | ❌ | `OPENAI_API_KEY` |
+| OpenRouter | ❌ | ✅ gpt-5.6-luna, Gemini | ❌ | `OPENROUTER_API_KEY` |
 | ARK (Doubao) | ❌ | ✅ Doubao | ❌ | `ARK_API_KEY` |
-| Siliconflow | ✅ SenseVoice | ❌ | ✅ Fish Audio | `SILICONFLOW_API_KEY` |
+| Siliconflow | ✅ SenseVoice | ❌ | ✅ CosyVoice2 | `SILICONFLOW_API_KEY` |
 
 ### 5. Configuration Validation
 
@@ -232,19 +255,24 @@ The system maintains backward compatibility with the previous hardcoded configur
 
 2. **Configure your preferred providers** in `backend/config.js`
 
-3. Start the backend server: 
+3. (Optional) **Verify your setup**: `cd backend && npm run check`
+
+4. Start the backend server (WebSocket server on port **8848**): 
    ```bash
    cd backend && npm start
    ```
+   You should see `Server is running on 0.0.0.0:8848`.
 
-4. Start the frontend development server: 
+5. Start the frontend development server (on port **3000**): 
    ```bash
    cd frontend && npm run dev
    ```
 
-5. Open http://localhost:3000 in your browser
+6. Open http://localhost:3000 in your browser (Chrome recommended)
 
-6. Click "Start Recording" to begin a conversation
+7. Click "Start Recording" and grant microphone permission to begin a conversation
+
+**Expected behavior**: after you finish speaking, the backend detects ~500 ms of silence (VAD), transcribes your speech (ASR), streams an LLM reply, and synthesizes it back as audio (TTS) that plays automatically. The on-screen log panel shows per-stage latency (WebSocket RTT, transcription, LLM, TTS). If you start speaking again while the assistant is talking, playback is interrupted.
 
 ## Testing
 
@@ -271,7 +299,7 @@ The test suite will automatically skip providers for which you don't have API ke
 
 - ✅ ASR provider functionality (OpenAI Whisper, SenseVoice)
 - ✅ LLM provider functionality (OpenAI, OpenRouter GPT-4o, OpenRouter Gemini, ARK Doubao)  
-- ✅ TTS provider functionality (Fish Audio via Siliconflow)
+- ✅ TTS provider functionality (CosyVoice2 via Siliconflow)
 - ✅ All provider combinations (8 ASR+LLM combinations)
 - ✅ Dynamic provider switching
 - ✅ Error handling and fallback mechanisms
@@ -297,7 +325,7 @@ The test suite will automatically skip providers for which you don't have API ke
 - **High Accuracy**: Use OpenAI ASR + OpenAI LLM
 - **China Deployment**: Use Siliconflow ASR + ARK LLM
 
-For detailed troubleshooting and configuration guidance, see [PROVIDER_GUIDE.md](backend/PROVIDER_GUIDE.md).
+For provider configuration, see [`backend/config.js.example`](backend/config.js.example) and the provider implementations under [`backend/utils/providers/`](backend/utils/providers).
 
 ## License
 

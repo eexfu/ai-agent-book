@@ -11,7 +11,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-OUT="深入理解-AI-Agent-李博杰-v1.0.pdf"
+OUT="深入理解-AI-Agent-李博杰-v1.2.pdf"
 CHAPTERS=(
     introduction.md
     chapter1.md
@@ -48,6 +48,7 @@ pandoc "${CHAPTERS[@]}" \
     --number-sections \
     -V documentclass=elegantbook \
     -V classoption=lang=cn \
+    -V classoption=nofont \
     -V classoption=cyan \
     -V classoption=device=normal \
     -V author="李博杰" \

@@ -7,6 +7,38 @@ from enum import Enum
 from pathlib import Path
 
 
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
+def _openrouter_model_id(model: Optional[str]) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-5.6-luna"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-5.6-luna)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    if ml.startswith("kimi"):
+        # kimi-k3 is not on OpenRouter; moonshotai/kimi-k2.6 is the closest hosted id.
+        return "moonshotai/kimi-k2.6"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-5.6-luna"
+
+
 class Provider(str, Enum):
     """Supported LLM providers"""
     SILICONFLOW = "siliconflow"
@@ -55,19 +87,19 @@ class LLMConfig:
             "base_url": "https://ark.cn-beijing.volces.com/api/v3"
         },
         "kimi": {
-            "model": "kimi-k2-0905-preview",
+            "model": "kimi-k3",
             "base_url": "https://api.moonshot.cn/v1"
         },
         "moonshot": {
-            "model": "kimi-k2-0905-preview",
+            "model": "kimi-k3",
             "base_url": "https://api.moonshot.cn/v1"
         },
         "openrouter": {
-            "model": "openai/gpt-4o-2024-11-20",
+            "model": "openai/gpt-5.6-luna",
             "base_url": "https://openrouter.ai/api/v1"
         },
         "openai": {
-            "model": "gpt-4o-2024-11-20",
+            "model": "gpt-5.6-luna",
             "base_url": "https://api.openai.com/v1"
         },
         "groq": {
@@ -93,10 +125,18 @@ class LLMConfig:
         api_key = self.api_key or os.getenv(f"{provider.upper()}_API_KEY")
         if not api_key and provider == "moonshot":
             api_key = os.getenv("KIMI_API_KEY")  # Fallback for moonshot
-        
+
         # Determine model
-        model = self.model or defaults.get("model", "gpt-4o")
-        
+        model = self.model or defaults.get("model", "gpt-5.6-luna")
+
+        # Universal OpenRouter fallback: primary provider key absent but
+        # OPENROUTER_API_KEY present -> route through OpenRouter.
+        if not api_key and provider != "openrouter" and os.getenv("OPENROUTER_API_KEY"):
+            return {
+                "api_key": os.getenv("OPENROUTER_API_KEY"),
+                "base_url": "https://openrouter.ai/api/v1",
+            }, _openrouter_model_id(model)
+
         # Build client config
         client_config = {"api_key": api_key}
         
@@ -191,7 +231,7 @@ class Config:
             "llm": {
                 "provider": self.llm.provider,
                 "model": self.llm.model,
-                "temperature": self.llm.temperature,
+                "temperature": _reasoning_safe_temperature(self.llm.model, self.llm.temperature),
                 "max_tokens": self.llm.max_tokens,
                 "stream": self.llm.stream
             },

@@ -1,6 +1,6 @@
 # Context-Aware AI Agent with Ablation Studies
 
-An advanced AI agent implementation supporting multiple LLM providers (SiliconFlow Qwen, ByteDance Doubao, and Moonshot Kimi), designed to demonstrate the critical importance of context components through systematic ablation studies.
+An advanced AI agent implementation supporting multiple LLM providers (SiliconFlow Qwen, ByteDance Doubao, Moonshot Kimi, and DeepSeek), designed to demonstrate the critical importance of context components through systematic ablation studies.
 
 ## 🎯 Overview
 
@@ -8,7 +8,7 @@ This project implements a context-aware AI agent with multiple tools (PDF parsin
 
 ### Key Features
 
-- **Multi-provider Support**: Works with SiliconFlow (Qwen), Doubao (ByteDance), and Kimi (Moonshot) LLMs
+- **Multi-provider Support**: Works with SiliconFlow (Qwen), Doubao (ByteDance), Kimi (Moonshot), and DeepSeek LLMs
 - **Multi-tool Agent**: PDF parsing, currency conversion, calculations, and Python code execution
 - **Context Modes**: Five different context configurations for ablation studies
 - **Interactive & Batch Modes**: Run single tasks or comprehensive test suites
@@ -23,15 +23,21 @@ This project implements a context-aware AI agent with multiple tools (PDF parsin
 - **Best for**: Advanced reasoning, faster responses, both English and Chinese tasks
 
 ### SiliconFlow
-- **Model**: Qwen/Qwen3-235B-A22B-Thinking-2507 (customizable)
+- **Model**: Qwen/Qwen3.5-397B-A17B (customizable)
 - **API**: OpenAI-compatible
 - **Best for**: Complex reasoning tasks, detailed analysis
 
 ### Kimi (Moonshot AI)
-- **Model**: kimi-k2-0905-preview (K2 model)
+- **Model**: kimi-k3 (K3 reasoning model; temperature is forced to 1 and max_tokens is large enough for its thinking output)
 - **API**: OpenAI-compatible via Moonshot platform
 - **Best for**: Advanced reasoning, multi-turn conversations, both English and Chinese tasks
 - **Features**: Context caching for cost optimization
+
+### DeepSeek
+- **Model**: deepseek-v4-flash (default; use `--model deepseek-v4-pro` for the stronger tier)
+- **API**: OpenAI-compatible via [DeepSeek Platform](https://platform.deepseek.com/)
+- **Best for**: Cost-effective tool-calling agents; thinking mode enabled so the `no_reasoning` ablation can strip `reasoning_content`
+- **Note**: Legacy aliases `deepseek-chat` / `deepseek-reasoner` are deprecated (2026-07-24); prefer the V4 ids
 
 ## 🏗️ Architecture
 
@@ -57,6 +63,7 @@ This project implements a context-aware AI agent with multiple tools (PDF parsin
   - **SiliconFlow**: Get from [SiliconFlow](https://siliconflow.cn)
   - **Doubao (ByteDance)**: Get from [Volcano Engine](https://www.volcengine.com/)
   - **Kimi (Moonshot)**: Get from [Moonshot Platform](https://platform.moonshot.cn/)
+  - **DeepSeek**: Get from [DeepSeek Platform](https://platform.deepseek.com/api_keys)
 
 ## 📝 Sample Tasks
 
@@ -101,14 +108,29 @@ python main.py --provider siliconflow
 export MOONSHOT_API_KEY=your_key_here
 python main.py --provider kimi
 
+# For DeepSeek
+export DEEPSEEK_API_KEY=your_key_here
+python main.py --provider deepseek
+# Optional stronger model:
+python main.py --provider deepseek --model deepseek-v4-pro
+
 # Or specify a custom model
 python main.py --model doubao-seed-1-6-thinking-250715
+
+# Universal OpenRouter fallback: if the provider key above is missing/invalid
+# but OPENROUTER_API_KEY is set, requests are routed through OpenRouter and the
+# model id is mapped automatically (bare gpt-*/o1-* -> openai/*, claude-* ->
+# anthropic/*, deepseek-* -> deepseek/*, other native ids -> OPENROUTER_MODEL
+# or openai/gpt-5.6-luna).
+export OPENROUTER_API_KEY=sk-or-v1-your-key-here
+python main.py                       # falls back to OpenRouter when ARK_API_KEY is unset
+python main.py --provider openrouter # or use OpenRouter directly
 ```
 
-### 3. Testing Kimi Integration
+### 3. Testing Kimi / DeepSeek Integration
 
 ```bash
-# Quick test of Kimi K2 model
+# Quick test of Kimi K3 model
 export MOONSHOT_API_KEY=your_key_here
 python test_kimi.py
 
@@ -117,6 +139,15 @@ python main.py --provider kimi --mode interactive
 
 # Run ablation study with Kimi
 python main.py --provider kimi --mode ablation
+
+# Quick test of DeepSeek V4
+export DEEPSEEK_API_KEY=your_key_here
+python test_deepseek.py
+# or: python quick_test_deepseek.py
+
+# Use DeepSeek in main script / ablation study
+python main.py --provider deepseek --mode interactive
+python main.py --provider deepseek --mode ablation
 ```
 
 ### 4. Run Interactive Mode (Recommended)
@@ -156,12 +187,33 @@ python main.py --mode single \
 ### 6. Run Ablation Study
 
 ```bash
-# With default provider
+# With default provider (single case, all five context modes)
 python main.py --mode ablation
 
 # With Doubao provider
 python main.py --mode ablation --provider doubao
+
+# Multi-case comparison across modes (stronger evidence for the book's point)
+python main.py --mode ablation --cases 3
+
+# Compare only two modes and save raw results to a custom path
+python main.py --mode ablation --ablation-modes full no_history --output my_ablation.json
 ```
+
+`main.py` is the single CLI entry point. Run `python main.py --help` for the
+full (Chinese) flag reference.
+
+Key flags:
+
+| Flag | Description |
+|------|-------------|
+| `--mode` | `single` / `ablation` / `interactive` (default) |
+| `--task` | Task text for `single` mode |
+| `--context-mode` | Context mode for `single` mode (`full`, `no_history`, `no_reasoning`, `no_tool_calls`, `no_tool_results`) |
+| `--ablation-modes` | Subset of modes to test in `ablation` mode (default: all five) |
+| `--cases` | Number of cases each mode is run against in `ablation` mode (default: 1) |
+| `--provider` / `--model` | LLM provider and optional model override |
+| `--output` | Output path for the JSON result (single) or raw results (ablation) |
 
 ## 🧪 Ablation Studies
 
@@ -177,25 +229,39 @@ A complex financial analysis task requiring:
 
 ### Expected Behaviors
 
-| Context Mode | Expected Behavior | Impact |
-|-------------|-------------------|---------|
-| **Full** | Complete successful execution | Baseline performance |
-| **No History** | Redundant operations, inefficiency | May repeat tool calls |
-| **No Reasoning** | Unstructured approach, potential errors | Lacks strategic planning |
-| **No Tool Calls** | Complete failure | Cannot interact with external world |
-| **No Tool Results** | Incorrect conclusions | Makes decisions without feedback |
+| Context Mode | Removed Component (book §实验 1.1) | Expected Behavior | Impact |
+|-------------|-----------------------------------|-------------------|---------|
+| **full** | none (baseline) | Complete successful execution | Baseline performance |
+| **no_history** | 历史消息 (history) | Redundant operations, inefficiency | May repeat tool calls |
+| **no_reasoning** | 思考过程 (reasoning) | Unstructured approach, potential errors | Lacks strategic planning |
+| **no_tool_calls** | 工具定义 (tool definitions) | Complete failure | Cannot interact with external world |
+| **no_tool_results** | 工具执行结果 (tool results) | Incorrect conclusions | Makes decisions without feedback |
+
+**How each ablation is applied** (see `agent.py`):
+
+- **no_tool_calls** — the `tools` parameter is omitted from the request, so the model has no tool definitions to call.
+- **no_tool_results** — every tool result is replaced with a `[Tool result hidden]` placeholder.
+- **no_reasoning** — `reasoning_content` is stripped from each assistant message before it is added back to the trajectory.
+- **no_history** — `_prepare_messages_for_api()` sends only a sliding window (system prompt + current task + the most recent ReAct step) to the model, so earlier steps are forgotten and the agent tends to repeat tool calls. Full mode always sends the complete trajectory.
 
 ### Running Tests
 
 ```bash
-# Run full ablation study
-python ablation_tests.py
+# Run the full ablation study (single case, all five modes)
+python main.py --mode ablation
+
+# Run across multiple cases for a stronger comparison
+python main.py --mode ablation --cases 3
 
 # This will generate:
-# - ablation_study_results.png (visualization)
+# - ablation_study_results.png (visualization, if matplotlib is installed)
 # - ablation_study_report.md (detailed report)
-# - ablation_results.json (raw data)
+# - ablation_results.json (raw data; override path with --output)
 ```
+
+The console prints two tables: a per-run **ablation study results** table and a
+**comparison matrix** (context mode x case) for reading the effect of each
+component at a glance.
 
 ## 📊 Understanding Results
 
@@ -315,15 +381,17 @@ export LOG_LEVEL=DEBUG
 
 ```
 context/
-├── agent.py              # Core agent implementation
-├── ablation_tests.py     # Ablation study test suite
-├── main.py              # Entry point with CLI
+├── agent.py              # Core agent implementation + context modes
+├── main.py              # Single CLI entry point (single / ablation / interactive)
 ├── config.py            # Configuration management
 ├── create_sample_pdf.py # PDF generation utility
 ├── requirements.txt     # Dependencies
 ├── env.example         # Environment template
 └── README.md           # This file
 ```
+
+> Note: the ablation study lives in `main.py` (`AblationTestSuite`), run via
+> `python main.py --mode ablation`. There is no separate `ablation_tests.py`.
 
 ## 🔬 Research Applications
 
@@ -356,6 +424,7 @@ MIT License - See LICENSE file for details
 ## 🙏 Acknowledgments
 
 - SiliconFlow for providing the Qwen model API
+- DeepSeek for the OpenAI-compatible V4 API
 - OpenAI for the client library
 - The AI agent research community
 

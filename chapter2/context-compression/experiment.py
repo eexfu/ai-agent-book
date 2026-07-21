@@ -7,7 +7,8 @@ import os
 import sys
 import json
 import time
-from typing import Dict, Any, List
+import argparse
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from dataclasses import asdict
 from colorama import init, Fore, Style
@@ -21,26 +22,49 @@ from compression_strategies import CompressionStrategy
 init(autoreset=True)
 
 
+# Short CLI aliases -> compression strategy (order matches the book's 实验 2-9)
+STRATEGY_CHOICES = {
+    "no_compression": CompressionStrategy.NO_COMPRESSION,
+    "individual": CompressionStrategy.NON_CONTEXT_AWARE_INDIVIDUAL,
+    "combined": CompressionStrategy.NON_CONTEXT_AWARE_COMBINED,
+    "context_aware": CompressionStrategy.CONTEXT_AWARE,
+    "citations": CompressionStrategy.CONTEXT_AWARE_CITATIONS,
+    "windowed": CompressionStrategy.WINDOWED_CONTEXT,
+}
+
+ALL_STRATEGIES = list(STRATEGY_CHOICES.values())
+
+
 class ExperimentRunner:
     """Runs experiments comparing different compression strategies"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, results_file: Optional[str] = None,
+                 enable_streaming: bool = False):
         """
         Initialize the experiment runner
-        
+
         Args:
             api_key: API key for Kimi/Moonshot
+            results_file: Optional explicit path for the results JSON (default: results/experiment_TIMESTAMP.json)
+            enable_streaming: Stream compression/model output to the console during the run
         """
         self.api_key = api_key
         self.results = []
-        
+        self.enable_streaming = enable_streaming
+
         # Create results directory
         Config.create_directories()
-        
+
         # Results file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.results_file = os.path.join(Config.RESULTS_DIR, f"experiment_{timestamp}.json")
-    
+        if results_file:
+            self.results_file = results_file
+            parent = os.path.dirname(self.results_file)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.results_file = os.path.join(Config.RESULTS_DIR, f"experiment_{timestamp}.json")
+
     def run_single_strategy(self, strategy: CompressionStrategy, verbose: bool = False) -> Dict[str, Any]:
         """
         Run experiment with a single compression strategy
@@ -61,7 +85,7 @@ class ExperimentRunner:
             api_key=self.api_key,
             compression_strategy=strategy,
             verbose=verbose,
-            enable_streaming=False  # Disable streaming for cleaner experiment output
+            enable_streaming=self.enable_streaming  # Off by default for cleaner experiment output
         )
         
         start_time = time.time()
@@ -84,6 +108,7 @@ class ExperimentRunner:
                 'tool_calls': len(trajectory.tool_calls) if trajectory else 0,
                 'context_overflows': trajectory.context_overflows if trajectory else 0,
                 'execution_time': execution_time,
+                'total_tokens': trajectory.total_tokens_used if trajectory else 0,
                 'error': result.get('error'),
                 'final_answer_length': len(result.get('final_answer', '')) if result.get('final_answer') else 0
             }
@@ -144,7 +169,8 @@ class ExperimentRunner:
         print(f"  Iterations: {metrics['iterations']}")
         print(f"  Tool Calls: {metrics['tool_calls']}")
         print(f"  Execution Time: {metrics['execution_time']:.2f}s")
-        
+        print(f"  Total Tokens: {metrics.get('total_tokens', 0):,}")
+
         if 'compression_ratio' in metrics:
             print(f"  Compression Ratio: {metrics['compression_ratio']:.1%}")
             print(f"  Original Size: {metrics['total_original_size']:,} chars")
@@ -163,17 +189,11 @@ class ExperimentRunner:
         else:
             return f"{Fore.RED}✗ No{Style.RESET_ALL}"
     
-    def run_all_strategies(self) -> None:
-        """Run experiments for all compression strategies"""
-        strategies = [
-            CompressionStrategy.NO_COMPRESSION,
-            CompressionStrategy.NON_CONTEXT_AWARE_INDIVIDUAL,
-            CompressionStrategy.NON_CONTEXT_AWARE_COMBINED,
-            CompressionStrategy.CONTEXT_AWARE,
-            CompressionStrategy.CONTEXT_AWARE_CITATIONS,
-            CompressionStrategy.WINDOWED_CONTEXT
-        ]
-        
+    def run_all_strategies(self, strategies: Optional[List[CompressionStrategy]] = None) -> None:
+        """Run experiments for the given compression strategies (default: all six)"""
+        if strategies is None:
+            strategies = list(ALL_STRATEGIES)
+
         print(f"\n{Fore.MAGENTA}{'='*70}")
         print(f"{Fore.MAGENTA}CONTEXT COMPRESSION STRATEGIES COMPARISON EXPERIMENT")
         print(f"{Fore.MAGENTA}{'='*70}{Style.RESET_ALL}")
@@ -208,24 +228,23 @@ class ExperimentRunner:
         print(f"{Fore.MAGENTA}{'='*70}{Style.RESET_ALL}")
         
         # Create comparison table
-        print(f"\n{'Strategy':<30} {'Success':<10} {'Time':<10} {'Compress':<12} {'Overflows':<10}")
-        print("-" * 70)
-        
+        print(f"\n{'Strategy':<38} {'Success':<9} {'Time':<9} {'Tokens':<11} {'Compress':<10} {'Overflows':<10}")
+        print("-" * 90)
+
         for result in self.results:
             metrics = result['metrics']
-            strategy = metrics['strategy'][:28]
+            strategy = metrics['strategy'][:36]
             success = "✓" if metrics['success'] else "✗"
-            time_str = f"{metrics['execution_time']:.1f}s"
+            time_str = f"{metrics.get('execution_time', 0):.1f}s"
+            tokens = f"{metrics.get('total_tokens', 0):,}" if metrics.get('total_tokens') else "N/A"
             compress = f"{metrics.get('compression_ratio', 1.0):.1%}" if 'compression_ratio' in metrics else "N/A"
             overflows = str(metrics.get('context_overflows', 0))
-            
+
             # Color code success
-            if metrics['success']:
-                print(f"{Fore.GREEN}{strategy:<30} {success:<10} {time_str:<10} {compress:<12} {overflows:<10}{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.RED}{strategy:<30} {success:<10} {time_str:<10} {compress:<12} {overflows:<10}{Style.RESET_ALL}")
-        
-        print("\n" + "="*70)
+            color = Fore.GREEN if metrics['success'] else Fore.RED
+            print(f"{color}{strategy:<38} {success:<9} {time_str:<9} {tokens:<11} {compress:<10} {overflows:<10}{Style.RESET_ALL}")
+
+        print("\n" + "="*90)
         
         # Analysis summary
         self._print_analysis()
@@ -250,7 +269,10 @@ class ExperimentRunner:
         if failed:
             print(f"\n  Failed Strategies:")
             for r in failed:
-                print(f"    - {r['metrics']['strategy']}: {r['metrics'].get('error', 'Unknown error')[:50]}...")
+                # error may be present-but-None when a strategy fails by hitting the
+                # iteration cap (rather than raising), so coalesce before slicing.
+                err = r['metrics'].get('error') or 'No final answer within max iterations'
+                print(f"    - {r['metrics']['strategy']}: {err[:50]}...")
         
         # Key findings
         print(f"\n{Fore.CYAN}🔍 Key Findings:{Style.RESET_ALL}")
@@ -261,8 +283,72 @@ class ExperimentRunner:
         print("  5. Windowed Context: Balance between detail and efficiency")
 
 
+def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器"""
+    parser = argparse.ArgumentParser(
+        prog="experiment.py",
+        description="上下文压缩策略对比实验（对应《深入理解 AI Agent》实验 2-9）。\n"
+                    "对同一个研究任务（追踪 OpenAI 联合创始人的现状）分别运行多种压缩策略，"
+                    "输出 token 用量 / 压缩率 / 成功率对比表，并保存 JSON 结果。",
+        epilog="示例：\n"
+               "  python experiment.py                       # 运行全部 6 种策略并对比\n"
+               "  python experiment.py -s context_aware      # 只运行“上下文感知压缩”\n"
+               "  python experiment.py -s individual combined # 只对比两种非任务感知策略\n"
+               "  python experiment.py --model kimi-k3 -o results/k2.json\n"
+               "  python experiment.py --list-strategies     # 查看可选策略名",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-s", "--strategy", nargs="+", choices=list(STRATEGY_CHOICES.keys()), metavar="NAME",
+        help="要运行的压缩策略（可指定多个，默认运行全部 6 种）。可选值："
+             + ", ".join(STRATEGY_CHOICES.keys()),
+    )
+    parser.add_argument(
+        "-m", "--model", default=None,
+        help=f"覆盖使用的模型名称（默认读取环境变量 MODEL_NAME，当前为 {Config.MODEL_NAME}）",
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, metavar="PATH",
+        help="结果 JSON 的保存路径（默认 results/experiment_<时间戳>.json）",
+    )
+    parser.add_argument(
+        "-n", "--max-iterations", type=int, default=None, metavar="N",
+        help=f"每个策略允许的最大迭代（工具调用轮数），默认 {Config.MAX_ITERATIONS}",
+    )
+    parser.add_argument(
+        "--streaming", action="store_true",
+        help="实时流式打印模型与压缩过程的输出（默认关闭，以获得更整洁的对比输出）",
+    )
+    parser.add_argument(
+        "--list-strategies", action="store_true",
+        help="列出所有可选的压缩策略名称后退出",
+    )
+    return parser
+
+
 def main():
     """Main entry point"""
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.list_strategies:
+        print("可选的压缩策略（--strategy 的取值）：")
+        for alias, strat in STRATEGY_CHOICES.items():
+            print(f"  {alias:<16} -> {strat.value}")
+        return
+
+    # Apply CLI overrides onto the shared Config
+    if args.model:
+        Config.MODEL_NAME = args.model
+    if args.max_iterations is not None:
+        Config.MAX_ITERATIONS = args.max_iterations
+
+    # Resolve which strategies to run
+    if args.strategy:
+        strategies = [STRATEGY_CHOICES[name] for name in args.strategy]
+    else:
+        strategies = list(ALL_STRATEGIES)
+
     # Check configuration
     if not Config.validate():
         print(f"\n{Fore.RED}Configuration validation failed!{Style.RESET_ALL}")
@@ -270,16 +356,20 @@ def main():
         print("  MOONSHOT_API_KEY=your_api_key_here")
         print("  SERPER_API_KEY=your_api_key_here (optional)")
         sys.exit(1)
-    
+
     # Print configuration
     Config.print_config()
-    
+
     # Create runner
-    runner = ExperimentRunner(Config.MOONSHOT_API_KEY)
-    
+    runner = ExperimentRunner(
+        Config.MOONSHOT_API_KEY,
+        results_file=args.output,
+        enable_streaming=args.streaming,
+    )
+
     # Run experiments
     try:
-        runner.run_all_strategies()
+        runner.run_all_strategies(strategies)
         print(f"\n{Fore.GREEN}✅ Experiment completed successfully!{Style.RESET_ALL}")
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}⚠️ Experiment interrupted by user{Style.RESET_ALL}")

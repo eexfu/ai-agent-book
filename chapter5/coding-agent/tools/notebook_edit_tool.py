@@ -27,7 +27,7 @@ class NotebookEditTool(BaseTool):
         """
         notebook_path = Path(params["notebook_path"]).expanduser().resolve()
         cell_id = params.get("cell_id")
-        new_source = params["new_source"]
+        new_source = params.get("new_source")
         cell_type = params.get("cell_type", "code")
         edit_mode = params.get("edit_mode", "replace")
         
@@ -42,6 +42,8 @@ class NotebookEditTool(BaseTool):
             cells = notebook.get('cells', [])
             
             if edit_mode == "insert":
+                if new_source is None:
+                    return {"error": "new_source required for insert mode"}
                 # Insert new cell
                 new_cell = {
                     "cell_type": cell_type,
@@ -83,6 +85,8 @@ class NotebookEditTool(BaseTool):
                 action = "deleted"
                 
             else:  # replace
+                if new_source is None:
+                    return {"error": "new_source required for replace mode"}
                 # Replace cell contents
                 if cell_id:
                     for cell in cells:

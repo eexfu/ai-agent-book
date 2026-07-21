@@ -329,6 +329,49 @@ The evaluation results are saved with:
 - **Error analysis**: Example errors for each language
 - **Per-language accuracy**: Sorted from worst to best
 
+### Step 4: Quantify the Before/After (offline, no GPU needed)
+
+The whole point of prompt distillation is captured in one before/after comparison:
+the same task, done by the **teacher (long prompt + thinking)** vs the **student
+(no prompt, direct answer)** — how much input cost is saved, and how much quality
+is retained. `compare.py` computes this **entirely offline** from the real dataset,
+the teacher labels, and the evaluation results (no model download, no network):
+
+```bash
+# Use the default tiktoken counter (works offline, reproducible)
+python compare.py
+
+# For the EXACT Qwen token counts (on a machine with the tokenizer available)
+python compare.py --tokenizer Qwen/Qwen3-30B-A3B-Instruct-2507
+
+# Show more per-case examples and save the full breakdown
+python compare.py --num_examples 20 --output_file ./comparison_results.json
+```
+
+It reports three things — all from real data, nothing estimated:
+
+1. **Input cost** — teacher pays the full classification prompt on every call;
+   student pays only the raw text.
+2. **Task quality** — the student's agreement rate with the teacher's labels
+   (distillation fidelity), read from `evaluation_results.json`.
+3. **Per-case table** — several real samples side by side (teacher tokens /
+   student tokens / teacher label / student prediction / match).
+
+**Measured result** (this repo's data, `tiktoken o200k_base` counter):
+
+| Dimension | Teacher (long prompt + thinking) | Student (no prompt) | Change |
+|-----------|----------------------------------|---------------------|--------|
+| Avg input tokens / call | 984.9 | 24.7 | **−97.5% (≈40× fewer)** |
+| Total input tokens (2,100 cases) | 2,068,204 | 51,913 | −97.5% |
+| Task quality (agreement w/ teacher) | 100% (reference) | **95.19%** (1999/2100) | −4.8 pp |
+
+On a per-input-token-billed API this input reduction lowers cost roughly
+proportionally; the teacher additionally spends thinking (CoT) **output** tokens
+that are not counted here, so the real gap is larger. Wall-clock latency depends
+on the serving stack and must be measured on GPU — `compare.py` deliberately does
+**not** fabricate a latency number. Exact token counts vary by tokenizer; pass
+`--tokenizer` for the student model's own count.
+
 ## Project Structure
 
 ```
@@ -339,7 +382,8 @@ prompt-distillation/
 ├── create_data_h100x8.sh              # Parallel data generation for H100x8
 ├── train_sft_trl.py                   # Training script using TRL (Step 2)
 ├── train_trl.sh                       # Training script (single GPU)
-├── evaluate.py                        # Evaluation script
+├── evaluate.py                        # Evaluation script (Step 3)
+├── compare.py                         # Before/after cost & quality comparison (Step 4, offline)
 ├── data/                              # Generated training data
 │   └── prompt_distillation_lang.jsonl
 └── models/                            # Trained model checkpoints
@@ -410,8 +454,8 @@ This implementation closely follows the tinker cookbook methodology with a key e
 **Same:**
 - Teacher model: Qwen3-30B-A3B-Thinking (same as tinker)
 - LoRA configuration: rank 32, alpha 16
-- Learning rate: 1e-4
-- Training epochs: 4
+- Learning rate: 2e-4
+- Training epochs: 1
 - Temperature: 0.15 (data generation)
 - Prompt: Identical language classification prompt
 
@@ -421,7 +465,7 @@ This implementation closely follows the tinker cookbook methodology with a key e
   - Same model size, but direct responses without reasoning tokens
   - 20-30x faster than thinking model in production
 - **Framework**: TRL (more accessible than tinker's internal framework)
-- **Max length**: 4096 (student doesn't need long context)
+- **Max length**: 2048 (student doesn't need long context)
 
 **Why This Is Better:**
 - Original tinker approach: Distill prompt only
@@ -437,14 +481,17 @@ After training, the student model (Qwen3-30B-A3B-Instruct) should:
 - ✅ Use **much less memory** per request (shorter context)
 - ✅ Lower inference cost (fewer tokens to process)
 
-**Inference Speed Comparison:**
+**Input-Cost Comparison (measured, not estimated):**
 
-| Setup | Tokens Processed | Response Time | Cost |
-|-------|------------------|---------------|------|
-| **Teacher (Thinking + Prompt)** | ~2500 tokens | ~2-3 seconds | High |
-| **Student (No Thinking, No Prompt)** | ~50 tokens | ~0.1 seconds | **50x cheaper** |
+Run `python compare.py` to reproduce the real numbers on this repo's data. With the
+default `tiktoken o200k_base` counter, the student processes **≈40× fewer input
+tokens per call** (984.9 → 24.7, a 97.5% reduction) while retaining **95.19%**
+agreement with the teacher's labels. See the table under *Usage → Step 4* for the
+full breakdown.
 
-This dramatic speedup makes the distilled model practical for **production deployment** where latency and cost matter.
+This makes the distilled model attractive for **production deployment** where input
+cost matters. Note: wall-clock latency depends on the serving stack and hardware and
+must be measured on GPU — this README does not quote a fabricated latency figure.
 
 ## Troubleshooting
 

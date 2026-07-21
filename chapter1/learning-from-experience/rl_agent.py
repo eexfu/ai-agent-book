@@ -45,9 +45,11 @@ class QLearningAgent:
         # Statistics
         self.episode_rewards = []
         self.episode_lengths = []
+        self.episode_victories = []  # Per-episode victory flag (1/0), for learning curves
         self.victories = 0
         self.total_episodes = 0
-    
+        self.learning_curve = []  # Snapshots recorded at checkpoints during train()
+
     def _get_state_hash(self, game: TreasureHuntGame) -> str:
         """
         Create a hashable representation of the game state.
@@ -161,13 +163,15 @@ class QLearningAgent:
         # Update statistics
         self.episode_rewards.append(total_reward)
         self.episode_lengths.append(steps)
+        self.episode_victories.append(1 if game.victory else 0)
         if game.victory:
             self.victories += 1
         self.total_episodes += 1
-        
+
         return total_reward, steps, game.victory
-    
-    def train(self, num_episodes: int = 1000, verbose: bool = True, stochastic: bool = False) -> Dict[str, Any]:
+
+    def train(self, num_episodes: int = 1000, verbose: bool = True,
+              stochastic: bool = False, checkpoint_interval: int = 0) -> Dict[str, Any]:
         """
         Train the agent for multiple episodes.
         
@@ -175,6 +179,9 @@ class QLearningAgent:
             num_episodes: Number of episodes to train
             verbose: Whether to print progress
             stochastic: Whether to use stochastic environment
+            checkpoint_interval: If > 0, record a learning-curve snapshot
+                (episode, windowed victory rate, Q-table size, epsilon) every
+                this many episodes. Snapshots are stored in self.learning_curve.
         """
         game = TreasureHuntGame(stochastic=stochastic)
         
@@ -186,9 +193,21 @@ class QLearningAgent:
             if verbose:
                 print(f"Adjusted epsilon_decay from {original_decay:.4f} to {self.epsilon_decay:.4f} for stochastic environment\n")
         
+        window = checkpoint_interval if checkpoint_interval and checkpoint_interval > 0 else 1000
+
         for episode in range(num_episodes):
             reward, steps, victory = self.train_episode(game)
-            
+
+            # Record a learning-curve snapshot at each checkpoint
+            if checkpoint_interval and checkpoint_interval > 0 and (episode + 1) % checkpoint_interval == 0:
+                recent = self.episode_victories[-window:]
+                self.learning_curve.append({
+                    "episode": episode + 1,
+                    "victory_rate": sum(recent) / len(recent),
+                    "q_table_size": len(self.q_table),
+                    "epsilon": self.epsilon,
+                })
+
             if verbose and (episode + 1) % 100 == 0:
                 recent_rewards = self.episode_rewards[-100:]
                 recent_victories = sum(
@@ -206,13 +225,14 @@ class QLearningAgent:
         return {
             "total_episodes": self.total_episodes,
             "total_victories": self.victories,
-            "victory_rate": self.victories / self.total_episodes,
+            "victory_rate": self.victories / self.total_episodes if self.total_episodes else 0.0,
             "final_epsilon": self.epsilon,
             "q_table_size": len(self.q_table),
             "episode_rewards": self.episode_rewards,
-            "episode_lengths": self.episode_lengths
+            "episode_lengths": self.episode_lengths,
+            "learning_curve": self.learning_curve,
         }
-    
+
     def evaluate(self, num_episodes: int = 100, verbose: bool = False, stochastic: bool = False) -> Dict[str, Any]:
         """
         Evaluate the trained agent without learning.
@@ -258,7 +278,7 @@ class QLearningAgent:
         return {
             "num_episodes": num_episodes,
             "victories": eval_victories,
-            "victory_rate": eval_victories / num_episodes,
+            "victory_rate": eval_victories / num_episodes if num_episodes else 0.0,
             "avg_reward": np.mean(eval_rewards),
             "std_reward": np.std(eval_rewards),
             "avg_length": np.mean(eval_lengths),

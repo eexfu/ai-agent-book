@@ -1,12 +1,39 @@
 """Configuration management for the execution tools MCP server."""
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var; fall back to default (with a warning) if malformed."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"Warning: invalid {name}={raw!r} (must be an integer); using default {default}",
+              file=sys.stderr)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var; fall back to default (with a warning) if malformed."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"Warning: invalid {name}={raw!r} (must be a number); using default {default}",
+              file=sys.stderr)
+        return default
 
 
 class Config:
@@ -26,8 +53,8 @@ class Config:
     MODEL: Optional[str] = os.getenv("MODEL")
     
     # Model parameters
-    TEMPERATURE: float = float(os.getenv("TEMPERATURE", "0.7"))
-    MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4096"))
+    TEMPERATURE: float = _env_float("TEMPERATURE", 0.7)
+    MAX_TOKENS: int = _env_int("MAX_TOKENS", 4096)
     
     # External Services
     GOOGLE_CALENDAR_CREDENTIALS_FILE: str = os.getenv(
@@ -46,7 +73,7 @@ class Config:
     AUTO_VERIFY_CODE: bool = (
         os.getenv("AUTO_VERIFY_CODE", "true").lower() == "true"
     )
-    MAX_OUTPUT_LENGTH: int = int(os.getenv("MAX_OUTPUT_LENGTH", "1000"))
+    MAX_OUTPUT_LENGTH: int = _env_int("MAX_OUTPUT_LENGTH", 1000)
     
     # Workspace Configuration
     WORKSPACE_DIR: Path = Path(os.getenv("WORKSPACE_DIR", os.getcwd()))
@@ -66,25 +93,44 @@ class Config:
         return None
     
     @classmethod
+    def effective_provider(cls) -> str:
+        """Resolve the provider actually used, applying the OpenRouter fallback.
+
+        Preserves default behavior when the configured provider's key is
+        present. Otherwise, if an OPENROUTER_API_KEY is available, transparently
+        fall back to 'openrouter' so the tools still run with only that key set.
+        """
+        provider = cls.PROVIDER.lower()
+        if cls.get_api_key(provider):
+            return provider
+        if cls.OPENROUTER_API_KEY:
+            return "openrouter"
+        return provider
+
+    @classmethod
     def validate(cls) -> None:
         """Validate the configuration."""
-        provider = cls.PROVIDER.lower()
+        provider = cls.effective_provider()
         api_key = cls.get_api_key(provider)
-        
+
         if not api_key:
             raise ValueError(
-                f"API key required for provider '{provider}'. "
-                f"Set {provider.upper()}_API_KEY environment variable."
+                f"API key required for provider '{cls.PROVIDER.lower()}'. "
+                f"Set one of {cls.PROVIDER.upper()}_API_KEY or OPENROUTER_API_KEY "
+                f"(universal fallback)."
             )
-    
+
     @classmethod
     def get_llm_config(cls) -> dict:
         """Get LLM configuration based on provider."""
-        provider = cls.PROVIDER.lower()
+        provider = cls.effective_provider()
         api_key = cls.get_api_key(provider)
-        
+
         if not api_key:
-            raise ValueError(f"API key not found for provider: {provider}")
+            raise ValueError(
+                f"API key not found for provider '{cls.PROVIDER.lower()}'. "
+                f"Set {cls.PROVIDER.upper()}_API_KEY or OPENROUTER_API_KEY."
+            )
         
         if provider == "siliconflow":
             return {
@@ -105,14 +151,14 @@ class Config:
                 "provider": "kimi",
                 "api_key": api_key,
                 "base_url": "https://api.moonshot.cn/v1",
-                "model": cls.MODEL or "kimi-k2-0905-preview"
+                "model": cls.MODEL or "kimi-k3"
             }
         elif provider == "openrouter":
             return {
                 "provider": "openrouter",
                 "api_key": api_key,
                 "base_url": "https://openrouter.ai/api/v1",
-                "model": cls.MODEL or "google/gemini-2.5-pro"
+                "model": cls.MODEL or "google/gemini-3.5-flash"
             }
         else:
             raise ValueError(
@@ -121,5 +167,6 @@ class Config:
             )
 
 
-# Validate configuration on import
-Config.validate()
+# Note: configuration is validated lazily when the LLM is actually used
+# (see LLMHelper), so that execution tools which do not require an LLM
+# (file write, code run, terminal) can be used offline without an API key.

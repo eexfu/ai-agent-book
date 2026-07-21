@@ -15,7 +15,7 @@ A production-ready AI coding agent built with Claude, implementing all technique
 
 ### 🛠️ Complete Tool Suite
 
-**All 17 tools from tools.json fully implemented:**
+**All 16 tools from tools.json fully implemented:**
 
 **File Operations (Pure Python):**
 - `Read` - File reading with image/PDF/notebook support
@@ -137,7 +137,7 @@ OPENROUTER_API_KEY=sk-or-v1-...
 OPENAI_API_KEY=sk-...
 
 # Select model appropriate for your provider
-DEFAULT_MODEL=claude-sonnet-4-20250514
+DEFAULT_MODEL=claude-sonnet-5
 ```
 
 **See [PROVIDERS.md](PROVIDERS.md) for detailed provider configuration guide.**
@@ -164,29 +164,116 @@ DEFAULT_MODEL=claude-sonnet-4-20250514
 
 The agent automatically handles the different API formats for each provider.
 
-## 📖 Usage
+### OpenRouter as a universal fallback
 
-### Run Examples
+You do **not** need a direct Anthropic or OpenAI key to run the agent. If the
+requested direct provider's key is missing, the agent transparently falls back
+to **OpenRouter** (via the OpenAI-compatible SDK) as long as
+`OPENROUTER_API_KEY` is set:
+
+- `PROVIDER=anthropic` **with** `ANTHROPIC_API_KEY` → Anthropic SDK, unchanged (default behavior).
+- `PROVIDER=anthropic` **without** `ANTHROPIC_API_KEY` (but `OPENROUTER_API_KEY` set) → routed through OpenRouter.
+- `PROVIDER=openai` **with** `OPENAI_API_KEY` → OpenAI SDK, unchanged.
+- `PROVIDER=openai` **without** `OPENAI_API_KEY` (but `OPENROUTER_API_KEY` set) → routed through OpenRouter.
+
+When falling back, the native model id is **prefixed/mapped** to an OpenRouter id:
+
+| Requested model | OpenRouter id used |
+|-----------------|--------------------|
+| `claude-sonnet-*` (e.g. `claude-sonnet-5`) | `anthropic/claude-sonnet-4.6` |
+| `claude-haiku-*` | `anthropic/claude-haiku-4.5` |
+| `claude-opus-*` / other `claude-*` | `anthropic/claude-opus-4.8` |
+| `gpt-*` / `o1-*` (e.g. `gpt-5.6-luna`) | `openai/<model>` |
+| already prefixed (`vendor/model`) | passed through unchanged |
+
+So a user with **only** an `OPENROUTER_API_KEY` can run, e.g.:
 
 ```bash
-# Interactive CLI (recommended)
-python main.py
+# No ANTHROPIC_API_KEY needed — falls back to OpenRouter automatically
+python main.py --provider anthropic --model claude-sonnet-5 -p "..."
 
-# Basic quickstart
-python quickstart.py
-
-# Complex multi-step task
-python example_complex_task.py
-
-# System hints demonstration
-python example_with_system_hints.py
+# gpt-5.6-luna routed through OpenRouter (no OPENAI_API_KEY needed)
+python main.py --provider openai --model gpt-5.6-luna -p "..."
 ```
+
+Set `PROVIDER=openrouter` explicitly (with a `vendor/model` id) if you want to
+target a specific OpenRouter model without any mapping.
 
 ## 📖 Usage
 
-### Interactive CLI (Recommended)
+### 命令行入口（`main.py`）
 
-The easiest way to use the agent is through the interactive CLI:
+`main.py` 是唯一推荐的入口，提供统一的 argparse 命令行界面。运行
+`python main.py --help` 查看完整的中文帮助：
+
+```bash
+python main.py --help
+```
+
+主要参数：
+
+| 参数 | 说明 |
+|------|------|
+| （无参数） | 进入交互式对话（默认行为） |
+| `-p, --prompt "任务"` | 非交互模式：执行单个任务后退出，适合脚本 / CI |
+| `--list-tools` | **离线**列出全部已注册工具及简介（无需 API Key，可用于自检） |
+| `--provider {anthropic,openai,openrouter}` | 临时覆盖 `.env` 中的 `PROVIDER` |
+| `--model 模型名` | 临时覆盖 `.env` 中的 `DEFAULT_MODEL` |
+| `--base-url URL` | 临时覆盖 API Base URL（自建网关 / 兼容 OpenAI 的服务） |
+| `--max-iterations N` | 单个任务的最大 Agent 迭代轮数（默认 50） |
+| `--no-color` | 禁用彩色输出（无 TTY 时自动禁用） |
+
+### 快速自检（离线，无需 API Key）
+
+先确认工具集加载正常：
+
+```bash
+$ python main.py --list-tools
+共 16 个工具：
+
+  Task           Launch a new agent to handle complex, multi-step tasks autonomously.
+  Bash           Executes a given bash command in a persistent shell session ...
+  Glob           - Fast file pattern matching tool that works with any codebase size
+  Grep           A powerful search tool built on ripgrep
+  ...
+```
+
+### 端到端示例：让 Agent 完成一个真实编码任务
+
+配置好 `.env`（见上文 Configuration）后，用一条命令让 Agent 创建并运行一个脚本：
+
+```bash
+python main.py -p "创建 hello_world.py：打印 Hello, World!，包含一个按姓名问候的函数和一个 main 演示块，然后运行它验证输出。"
+```
+
+**成功时的终端输出结构大致如下**（示意，实际轮次/调用次数取决于模型）：
+
+```
+✓ Agent initialized successfully
+You: 创建 hello_world.py ...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔧 Calling tool: Write
+   ✓ Completed (call #1)
+   ✓ No lint errors
+   File: hello_world.py
+🔧 Calling tool: Bash
+   ✓ Completed (call #2)
+   Output:
+     Hello, World!
+     Hello, Alice!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Task completed!
+   Iterations: 2
+   Tool calls: 2
+```
+
+> 判定成功的标志：Agent 依次调用 `Write` 写文件、`Bash` 运行脚本，
+> 终端出现脚本的真实输出，并以 `✅ Task completed!` 收尾。
+> （`quickstart.py` 是同一任务的脚本化版本，可作对照。）
+
+### 交互式对话（默认）
+
+不带 `-p` 直接运行即进入交互式会话：
 
 ```bash
 python main.py
@@ -200,12 +287,20 @@ python main.py
 - 💬 Conversation history
 - 🔄 Reset command to start fresh
 
-**CLI Commands:**
+**会话内命令（在对话中输入）：**
 - `/help` - Show help message
 - `/quit` or `/exit` - Exit the CLI
 - `/reset` - Reset conversation history
 - `/clear` - Clear the screen
 - `/status` - Show agent status (tool calls, TODOs, etc.)
+
+### 其他示例脚本（均需 API Key）
+
+```bash
+python quickstart.py                  # 基础快速上手（与上文端到端示例同款任务）
+python example_complex_task.py        # 复杂多步任务
+python example_with_system_hints.py   # 系统提示（System Hint）技术演示
+```
 
 ### Programmatic Usage
 
@@ -374,7 +469,7 @@ Python: Python 3.11.5
 ANTHROPIC_API_KEY=your_key_here
 
 # Optional
-DEFAULT_MODEL=claude-sonnet-4-20250514
+DEFAULT_MODEL=claude-sonnet-5
 MAX_ITERATIONS=50
 MAX_TOKENS=8192
 ```

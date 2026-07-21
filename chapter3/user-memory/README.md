@@ -38,7 +38,7 @@ A sophisticated user memory system featuring separated architecture for conversa
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd projects/week2/user-memory
+cd chapter3/user-memory
 ```
 
 2. Install dependencies:
@@ -234,7 +234,7 @@ python main.py --mode evaluation \
 
 | Provider | Models | Best For |
 |----------|--------|----------|
-| **Kimi/Moonshot** | kimi-k2-0905-preview | Chinese language, general tasks |
+| **Kimi/Moonshot** | kimi-k3 | Chinese language, general tasks |
 | **SiliconFlow** | Qwen3-235B-A22B-Thinking | High performance, reasoning |
 | **Doubao** | doubao-seed-1-6-thinking | ByteDance ecosystem, reasoning |
 | **OpenRouter** | Gemini 2.5 Pro, GPT-5, Claude Sonnet 4 | Multiple top-tier models |
@@ -246,7 +246,7 @@ python main.py --mode evaluation \
 python main.py --provider siliconflow --model "Qwen/Qwen3-235B-A22B-Thinking-2507"
 
 # Using OpenRouter with Gemini
-python main.py --provider openrouter --model "google/gemini-2.5-pro"
+python main.py --provider openrouter --model "google/gemini-3.5-flash"
 
 # Using Doubao
 python main.py --provider doubao --model "doubao-seed-1-6-thinking-250715"
@@ -376,7 +376,7 @@ python main.py \
     --user custom_user \
     --memory-mode advanced_json_cards \
     --provider openrouter \
-    --model "google/gemini-2.5-pro" \
+    --model "google/gemini-3.5-flash" \
     --conversation-interval 3 \
     --background-processing True \
     --no-verbose
@@ -408,12 +408,13 @@ user-memory/
 
 ## 🔧 Development
 
-### Running Tests
+### Smoke-testing the system
 ```bash
-# Test specific components
-python test_agent.py
-python test_streaming.py
-python test_providers.py
+# Quick end-to-end demo (separated conversation + memory processing)
+python quickstart.py
+
+# Offline memory consolidation/dedup (no API call)
+python -c "from memory_manager import NotesMemoryManager; m=NotesMemoryManager('smoke'); print(m.consolidate_memories())"
 ```
 
 ### Adding New Providers
@@ -447,3 +448,14 @@ python test_providers.py
 ## 📮 Support
 
 [Support Information]
+
+
+## OpenRouter 通用回退 / Universal OpenRouter fallback
+
+This experiment now supports a **universal OpenRouter fallback** for its chat LLM.
+
+- If the primary provider key (e.g. `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `OPENAI_API_KEY` / `DOUBAO_API_KEY` …) is present, behavior is unchanged.
+- Else if `OPENROUTER_API_KEY` is set, the chat LLM is automatically routed through OpenRouter (`https://openrouter.ai/api/v1`). Model names are mapped automatically: `gpt-*`/`o1-*` → `openai/…`, `claude-*` → `anthropic/claude-opus-4.8`, `kimi-*` → `moonshotai/kimi-k2.6`, ids already containing `/` are kept as-is, and other provider-native ids (e.g. `doubao-*`) fall back to `openai/gpt-5.6-luna`. Set `OPENROUTER_MODEL` to force a specific OpenRouter model id.
+- Else a clear error lists the accepted keys.
+
+Add `OPENROUTER_API_KEY=...` to your `.env` (see `env.example`) to enable it.

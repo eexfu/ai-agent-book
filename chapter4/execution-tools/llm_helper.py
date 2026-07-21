@@ -6,20 +6,65 @@ from openai import OpenAI
 from config import Config
 
 
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
+def _parse_json_response(content):
+    """Parse a JSON object out of an LLM reply, tolerating markdown fences.
+
+    Reasoning models (notably kimi-k3) reliably return valid JSON but wrap it
+    in a ```json ... ``` code fence, so a bare json.loads() fails with
+    "Expecting value: line 1 column 1". Strip an optional fence and, as a last
+    resort, slice from the first '{' to the last '}' before parsing."""
+    text = (content or "").strip()
+    if text.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and the closing fence.
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
 class LLMHelper:
     """Helper class for LLM-based operations."""
     
     def __init__(self):
-        """Initialize the LLM client based on configuration."""
-        llm_config = Config.get_llm_config()
-        
-        # All providers use OpenAI-compatible API
-        self.client = OpenAI(
-            api_key=llm_config["api_key"],
-            base_url=llm_config.get("base_url")
-        )
-        self.model = llm_config["model"]
-        self.provider = llm_config["provider"]
+        """Initialize the LLM helper.
+
+        The OpenAI-compatible client is created lazily on first use so that
+        execution tools which do not need an LLM (e.g. Python code execution
+        with local syntax checking, terminal commands, file writes) work
+        offline without any API key configured. Methods that actually call
+        the LLM (approval, summarization, non-Python syntax check) will raise
+        or fail-safe if no key is available.
+        """
+        self.client = None
+        self.model = None
+        self.provider = None
+
+    def _ensure_client(self) -> None:
+        """Create the LLM client on first use (raises if no API key)."""
+        if self.client is None:
+            llm_config = Config.get_llm_config()
+            # All providers use OpenAI-compatible API
+            self.client = OpenAI(
+                api_key=llm_config["api_key"],
+                base_url=llm_config.get("base_url")
+            )
+            self.model = llm_config["model"]
+            self.provider = llm_config["provider"]
     
     def request_approval(
         self, 
@@ -58,6 +103,7 @@ Respond in JSON format:
 """
         
         try:
+            self._ensure_client()
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -67,11 +113,11 @@ Respond in JSON format:
                     },
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,
+                temperature=_reasoning_safe_temperature(self.model, 0.1),
                 max_tokens=Config.MAX_TOKENS
             )
-            
-            result = json.loads(response.choices[0].message.content)
+
+            result = _parse_json_response(response.choices[0].message.content)
             return result["approved"], result["reason"]
             
         except Exception as e:
@@ -107,6 +153,7 @@ Output to summarize:
 Provide a concise summary that captures the essential information."""
         
         try:
+            self._ensure_client()
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -116,15 +163,15 @@ Provide a concise summary that captures the essential information."""
                     },
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,
+                temperature=_reasoning_safe_temperature(self.model, 0.1),
                 max_tokens=Config.MAX_TOKENS
             )
-            
+
             summary = response.choices[0].message.content
             return f"[SUMMARIZED OUTPUT]\n{summary}\n\n[Original output length: {len(output)} characters]"
-            
+
         except Exception as e:
-            return f"[SUMMARIZATION FAILED: {str(e)}]\n\n{output[:max_length]}..."
+            return f"[SUMMARIZATION FAILED: {str(e)}]\n\n{output[:Config.MAX_OUTPUT_LENGTH]}..."
     
     def analyze_error(
         self,
@@ -159,6 +206,7 @@ Provide:
 Be concise and practical."""
         
         try:
+            self._ensure_client()
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -168,10 +216,10 @@ Be concise and practical."""
                     },
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.2,
+                temperature=_reasoning_safe_temperature(self.model, 0.2),
                 max_tokens=Config.MAX_TOKENS
             )
-            
+
             return response.choices[0].message.content
             
         except Exception as e:
@@ -216,6 +264,7 @@ Respond in JSON format:
 """
         
         try:
+            self._ensure_client()
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -225,11 +274,11 @@ Respond in JSON format:
                     },
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,
+                temperature=_reasoning_safe_temperature(self.model, 0.1),
                 max_tokens=Config.MAX_TOKENS
             )
             
-            result = json.loads(response.choices[0].message.content)
+            result = _parse_json_response(response.choices[0].message.content)
             if result["valid"]:
                 return True, None
             else:

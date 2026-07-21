@@ -313,49 +313,50 @@ def print_confusion_matrix(confusion_data: Dict):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate the distilled prompt model"
+        description="评估蒸馏后的学生模型（无提示、直接作答）在语言分类上的表现",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--model_path",
         type=str,
         default="./models/prompt_distillation_trl",
-        help="Path to the trained LoRA adapters (default: ./models/prompt_distillation_trl)",
+        help="训练得到的 LoRA adapter 路径",
     )
     parser.add_argument(
         "--base_model",
         type=str,
         default="Qwen/Qwen3-30B-A3B-Instruct-2507",
-        help="Base student model name (non-thinking variant)",
+        help="学生基座模型名称（非思考型）",
     )
     parser.add_argument(
         "--test_file",
         type=str,
         default="./example-data/multilingual.txt",
-        help="Test sentences file (one per line)",
+        help="测试文本文件（每行一句）",
     )
     parser.add_argument(
         "--ground_truth_file",
         type=str,
         default=None,
-        help="Ground truth labels file (optional, one per line). If not provided, will try to load from training data.",
+        help="标准答案标签文件（可选，每行一个）。未提供时会尝试从训练数据中读取",
     )
     parser.add_argument(
         "--train_data_file",
         type=str,
         default="./data/prompt_distillation_lang.jsonl",
-        help="Training data file to extract ground truth from (if ground_truth_file not provided)",
+        help="训练数据文件，未提供 ground_truth_file 时从中提取教师标签作为基准",
     )
     parser.add_argument(
         "--output_file",
         type=str,
         default="./evaluation_results.json",
-        help="Where to save evaluation results",
+        help="评估结果的保存路径",
     )
     parser.add_argument(
         "--max_samples",
         type=int,
         default=None,
-        help="Maximum number of samples to evaluate (for quick testing)",
+        help="最多评估的样本数（用于快速测试）",
     )
     
     args = parser.parse_args()

@@ -17,6 +17,7 @@ from typing import Dict, Any
 
 from dotenv import load_dotenv
 from browser_use import ChatOpenAI
+from llm_factory import make_llm
 from learning_agent import LearningAgent, KnowledgeBase, Workflow, WorkflowStep
 from learning_agent.workflow import ActionType
 
@@ -319,7 +320,7 @@ async def quick_integration_test():
         
         agent = LearningAgent(
             task=task,
-            llm=ChatOpenAI(model="gpt-4o-mini"),
+            llm=make_llm(),
             knowledge_base_path="./quick_test_kb",
             headless=True
         )

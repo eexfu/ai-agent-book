@@ -23,6 +23,14 @@ from advanced_memory_manager import AdvancedMemoryManager, AdvancedMemoryCard
 from chunker import ConversationChunker, ConversationChunk
 
 
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -591,7 +599,7 @@ Respond with valid JSON only."""
                     {"role": "system", "content": "You are an evaluation judge. Evaluate if the agent's answer correctly addresses the user's question based on the criteria."},
                     {"role": "user", "content": eval_prompt}
                 ],
-                temperature=0.1,
+                temperature=_reasoning_safe_temperature(model, 0.1),
                 response_format={"type": "json_object"}
             )
             

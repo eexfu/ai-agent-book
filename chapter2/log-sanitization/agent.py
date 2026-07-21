@@ -2,6 +2,7 @@
 Log Sanitization Agent using Local Ollama LLM
 """
 
+import os
 import time
 import re
 import json
@@ -24,13 +25,20 @@ class LogSanitizationAgent:
     """Agent for sanitizing logs using local Qwen3 0.6B model via Ollama"""
     
     def __init__(self, model: str = OLLAMA_MODEL):
-        """Initialize the sanitization agent"""
+        """Initialize the sanitization agent.
+
+        Primary backend is the local Ollama model. If Ollama is unavailable
+        (not running / not reachable) and OPENROUTER_API_KEY is set, the agent
+        falls back to OpenRouter (default hosted model: openai/gpt-5.6-luna),
+        so the experiment still runs without a local model.
+        """
         self.model = model
-        self.client = ollama.Client()
+        self.backend = "ollama"
         self.metrics_collector = MetricsCollector(OUTPUT_DIR)
-        
-        # Check if Ollama is running and model is available
+
+        # Try the local Ollama backend first.
         try:
+            self.client = ollama.Client()
             models = self.client.list()
             # models is a dict with 'models' key containing a list
             if isinstance(models, dict) and 'models' in models:
@@ -38,18 +46,77 @@ class LogSanitizationAgent:
             else:
                 # If it's a direct list (older API versions)
                 available_models = [m.get('name', '') for m in models] if isinstance(models, list) else []
-            
+
             if not any(self.model in m for m in available_models):
                 print(f"⚠️  Model {self.model} not found. Pulling it now...")
                 self.client.pull(self.model)
                 print(f"✅ Model {self.model} pulled successfully")
             else:
                 print(f"✅ Using model: {self.model}")
-                
+
         except Exception as e:
-            print(f"❌ Failed to connect to Ollama: {e}")
-            print("Please ensure Ollama is running: ollama serve")
-            raise
+            # Universal fallback: route through OpenRouter when Ollama is down.
+            openrouter_key = os.getenv("OPENROUTER_API_KEY")
+            if openrouter_key:
+                from openai import OpenAI
+                from openrouter_fallback import (
+                    OPENROUTER_BASE_URL,
+                    map_model_to_openrouter,
+                )
+                self.backend = "openrouter"
+                self.client = OpenAI(api_key=openrouter_key,
+                                     base_url=OPENROUTER_BASE_URL)
+                # 本地小模型（qwen3:0.6b 等）在 OpenRouter 上未必可用，
+                # 默认改用 openai/gpt-5.6-luna；带 "/" 的 id 原样透传。
+                self.model = (map_model_to_openrouter(self.model)
+                              if "/" in self.model else "openai/gpt-5.6-luna")
+                print(f"⚠️  Ollama unavailable ({e}); "
+                      f"falling back to OpenRouter model: {self.model}")
+            else:
+                print(f"❌ Failed to connect to Ollama: {e}")
+                print("Please ensure Ollama is running: ollama serve, "
+                      "or set OPENROUTER_API_KEY as a fallback")
+                raise
+
+    def _chat_stream(self, messages):
+        """Yield content chunks from the active backend (Ollama or OpenRouter)."""
+        if self.backend == "ollama":
+            stream = self.client.chat(
+                model=self.model,
+                messages=messages,
+                stream=True,
+                format=PII_DETECTION_SCHEMA,  # Use structured output format
+                options={
+                    "temperature": OLLAMA_TEMPERATURE,
+                    "num_predict": 1000,
+                }
+            )
+            for chunk in stream:
+                yield chunk.get('message', {}).get('content', '')
+        else:
+            # 用与 Ollama 相同的 JSON Schema 强约束输出结构（pii_values 数组），
+            # 避免模型自行发明字段名。strict 模式要求 additionalProperties=false。
+            strict_schema = dict(PII_DETECTION_SCHEMA)
+            strict_schema["additionalProperties"] = False
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=True,
+                temperature=OLLAMA_TEMPERATURE,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "pii_detection",
+                        "strict": True,
+                        "schema": strict_schema,
+                    },
+                },
+                max_tokens=1000,
+            )
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                yield chunk.choices[0].delta.content or ""
     
     def count_tokens(self, text: str) -> int:
         """Estimate token count (rough approximation)"""
@@ -89,32 +156,20 @@ class LogSanitizationAgent:
         full_response = ""
         
         try:
-            # Use structured output with JSON schema
-            stream = self.client.chat(
-                model=self.model,
-                messages=messages,
-                stream=True,
-                format=PII_DETECTION_SCHEMA,  # Use structured output format
-                options={
-                    "temperature": OLLAMA_TEMPERATURE,
-                    "num_predict": 1000  # Increased for thinking + PII
-                }
-            )
-            
+            # Use structured output with JSON schema (backend-agnostic stream)
             print("\n   🧠 Analyzing (JSON): \033[90m", end="", flush=True)  # Gray color for JSON
-            
-            for chunk in stream:
-                if first_token_time is None and chunk.get('message', {}).get('content'):
+
+            for content in self._chat_stream(messages):
+                if first_token_time is None and content:
                     first_token_time = time.perf_counter()
-                
-                content = chunk.get('message', {}).get('content', '')
+
                 full_response += content
                 output_tokens_count += len(content) // 4  # Rough token estimate
-                
+
                 # Stream the actual content
                 if content:
                     print(content, end="", flush=True)
-            
+
             print("\033[0m")  # Reset color and new line
             
             end_time = time.perf_counter()
@@ -218,19 +273,21 @@ class LogSanitizationAgent:
         # Sanitize the text
         sanitized_text, replacements = self.sanitize_text(conv_text, pii_values)
         
-        # Create performance metric
+        # Create performance metric. detect_pii() returns an empty metrics dict
+        # when the LLM backend fails (e.g. Ollama not running) — fall back to
+        # zeros so one failed conversation doesn't crash the whole batch.
         metric = PerformanceMetrics(
             test_id=test_id,
             conversation_id=conv_id,
             input_text_length=len(conv_text),
-            input_tokens=perf_metrics['input_tokens'],
-            prefill_time_ms=perf_metrics['prefill_time_ms'],
-            output_time_ms=perf_metrics['output_time_ms'],
-            total_time_ms=perf_metrics['total_time_ms'],
-            output_tokens=perf_metrics['output_tokens'],
-            prefill_speed_tps=perf_metrics['prefill_speed_tps'],
-            output_speed_tps=perf_metrics['output_speed_tps'],
-            pii_items_found=perf_metrics['pii_items_found'],
+            input_tokens=perf_metrics.get('input_tokens', 0),
+            prefill_time_ms=perf_metrics.get('prefill_time_ms', 0),
+            output_time_ms=perf_metrics.get('output_time_ms', 0),
+            total_time_ms=perf_metrics.get('total_time_ms', 0),
+            output_tokens=perf_metrics.get('output_tokens', 0),
+            prefill_speed_tps=perf_metrics.get('prefill_speed_tps', 0),
+            output_speed_tps=perf_metrics.get('output_speed_tps', 0),
+            pii_items_found=perf_metrics.get('pii_items_found', 0),
             replacements_made=replacements,
             sanitized_text_length=len(sanitized_text)
         )

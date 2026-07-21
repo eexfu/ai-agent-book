@@ -16,12 +16,16 @@ class Config:
     # API Configuration
     MOONSHOT_API_KEY: str = os.getenv("MOONSHOT_API_KEY", "")
     MOONSHOT_BASE_URL: str = "https://api.moonshot.cn/v1"
+
+    # Universal fallback: 当 MOONSHOT_API_KEY 缺失但设置了 OPENROUTER_API_KEY 时，
+    # 自动改走 OpenRouter（kimi-* 模型名映射为 moonshotai/kimi-k2）。
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     SERPER_BASE_URL: str = "https://google.serper.dev"
     
     # Model Configuration
-    MODEL_NAME: str = os.getenv("MODEL_NAME", "kimi-k2-0905-preview")
+    MODEL_NAME: str = os.getenv("MODEL_NAME", "kimi-k3")
     MODEL_TEMPERATURE: float = float(os.getenv("MODEL_TEMPERATURE", "0.3"))
     MODEL_MAX_TOKENS: int = int(os.getenv("MODEL_MAX_TOKENS", "8192"))
     
@@ -34,7 +38,7 @@ class Config:
     SUMMARY_MAX_TOKENS: int = int(os.getenv("SUMMARY_MAX_TOKENS", "500"))
     
     # Context Window Configuration
-    CONTEXT_WINDOW_SIZE: int = 128000  # 128K context window for Kimi K2
+    CONTEXT_WINDOW_SIZE: int = 128000  # 128K context budget for the compression demo (K3 supports up to 1M)
     
     # Logging Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -52,9 +56,10 @@ class Config:
         Returns:
             True if configuration is valid
         """
-        if not cls.MOONSHOT_API_KEY:
-            print("ERROR: MOONSHOT_API_KEY is not set")
-            print("Please set it in .env file or as environment variable")
+        if not cls.MOONSHOT_API_KEY and not cls.OPENROUTER_API_KEY:
+            print("ERROR: neither MOONSHOT_API_KEY nor OPENROUTER_API_KEY is set")
+            print("Please set MOONSHOT_API_KEY (primary) or OPENROUTER_API_KEY "
+                  "(universal fallback) in .env or as an environment variable")
             return False
         
         if not cls.SERPER_API_KEY:
@@ -64,6 +69,20 @@ class Config:
         
         return True
     
+    @classmethod
+    def resolve_llm(cls):
+        """Return ``(api_key, base_url, model)`` honoring the MOONSHOT->OpenRouter fallback.
+
+        Computed at call time so a runtime override of ``Config.MODEL_NAME``
+        (e.g. via ``--model``) is respected.
+        """
+        from openrouter_fallback import resolve_llm as _resolve
+        return _resolve(
+            model=cls.MODEL_NAME,
+            primary_keys=("MOONSHOT_API_KEY", "KIMI_API_KEY"),
+            primary_base_url=cls.MOONSHOT_BASE_URL,
+        )
+
     @classmethod
     def create_directories(cls):
         """Create necessary directories if they don't exist"""

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from browser_use import ChatOpenAI
 from learning_agent import LearningAgent
+from llm_factory import make_llm
 
 
 # Configure logging
@@ -36,7 +37,7 @@ async def demo_weather_learning():
     
     agent1 = LearningAgent(
         task=task1,
-        llm=ChatOpenAI(model="gpt-4o-mini"),
+        llm=make_llm(),
         knowledge_base_path="./weather_knowledge",
         headless=False  # Show browser for demo
     )
@@ -63,7 +64,7 @@ async def demo_weather_learning():
     
     agent2 = LearningAgent(
         task=task2,
-        llm=ChatOpenAI(model="gpt-4o-mini"),
+        llm=make_llm(),
         knowledge_base_path="./weather_knowledge",
         headless=False
     )

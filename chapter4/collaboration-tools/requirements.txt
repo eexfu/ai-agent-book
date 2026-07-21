@@ -39,5 +39,8 @@ pandas>=2.0.0
 # Intelligence Tools (requires OpenAI API)
 openai>=1.0.0
 
+# Sub-Agent Tools: token counting for context-strategy comparison (optional; code falls back if absent)
+tiktoken>=0.5.0
+
 # Logging
 loguru>=0.7.0

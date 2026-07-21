@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick test script to verify Kimi K2 model integration
+Quick test script to verify Kimi K3 model integration
 """
 
 import os
@@ -19,7 +19,7 @@ def main():
         print("  MOONSHOT_API_KEY=your_api_key_here")
         return
     
-    print("🚀 Testing Kimi K2 Model (kimi-k2-0905-preview)")
+    print("🚀 Testing Kimi K3 Model (kimi-k3)")
     print("=" * 50)
     
     try:
@@ -43,7 +43,7 @@ def main():
         print(f"   Query: {query}")
         print(f"   Response: {response}")
         
-        print("\n✅ Kimi K2 integration is working!")
+        print("\n✅ Kimi K3 integration is working!")
         
     except Exception as e:
         print(f"\n❌ Error: {e}")

@@ -8,7 +8,7 @@ The User Memory System now supports multiple LLM providers, allowing you to choo
 - **Provider names**: `kimi` or `moonshot`
 - **API Key**: `MOONSHOT_API_KEY`
 - **Base URL**: `https://api.moonshot.cn/v1`
-- **Default Model**: `kimi-k2-0905-preview`
+- **Default Model**: `kimi-k3`
 
 ### 2. **SiliconFlow**
 - **Provider name**: `siliconflow`
@@ -26,9 +26,9 @@ The User Memory System now supports multiple LLM providers, allowing you to choo
 - **Provider name**: `openrouter`
 - **API Key**: `OPENROUTER_API_KEY`
 - **Base URL**: `https://openrouter.ai/api/v1`
-- **Default Model**: `google/gemini-2.5-pro`
+- **Default Model**: `google/gemini-3.5-flash`
 - **Supported Models**:
-  - `google/gemini-2.5-pro` - Google's Gemini 2.5 Pro model
+  - `google/gemini-3.5-flash` - Google's Gemini 3.5 Flash model
   - `openai/gpt-5` - OpenAI's GPT-5 model
   - `anthropic/claude-sonnet-4` - Anthropic's Claude Sonnet 4 model
 
@@ -79,7 +79,7 @@ python main.py \
     --user my_user
 
 # Using OpenRouter with specific models
-python main.py --provider openrouter --model "google/gemini-2.5-pro" --mode interactive
+python main.py --provider openrouter --model "google/gemini-3.5-flash" --mode interactive
 python main.py --provider openrouter --model "openai/gpt-5" --mode demo
 python main.py --provider openrouter --model "anthropic/claude-sonnet-4" --mode evaluation
 ```
@@ -142,7 +142,7 @@ processor = BackgroundMemoryProcessor(
 processor = BackgroundMemoryProcessor(
     user_id="user_openrouter",
     provider="openrouter",
-    model="google/gemini-2.5-pro",  # or "openai/gpt-5", "anthropic/claude-sonnet-4"
+    model="google/gemini-3.5-flash",  # or "openai/gpt-5", "anthropic/claude-sonnet-4"
     config=MemoryProcessorConfig(
         conversation_interval=1,
         update_threshold=0.6
@@ -221,5 +221,5 @@ elif self.provider == "openrouter":
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1"
     )
-    self.model = model or "google/gemini-2.5-pro"
+    self.model = model or "google/gemini-3.5-flash"
 ```

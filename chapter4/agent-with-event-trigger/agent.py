@@ -27,6 +27,45 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import TextContent
 
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
+# Per-provider env var holding that provider's API key.
+_PROVIDER_KEY_ENV = {
+    "siliconflow": "SILICONFLOW_API_KEY",
+    "doubao": "DOUBAO_API_KEY",
+    "kimi": "KIMI_API_KEY",
+    "moonshot": "KIMI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+
+
+def resolve_provider_and_key(provider: Optional[str] = None):
+    """Resolve (provider, api_key) applying a universal OpenRouter fallback.
+
+    Preferred provider (default from LLM_PROVIDER, else 'kimi') is used as today
+    when its own key is present. Otherwise, if OPENROUTER_API_KEY is set, fall
+    back to the already-supported 'openrouter' provider so the agent still runs.
+    Returns (provider, None) when no usable key is found, leaving the caller to
+    emit its own error.
+    """
+    provider = (provider or os.getenv("LLM_PROVIDER", "kimi")).lower()
+    key_env = _PROVIDER_KEY_ENV.get(provider)
+    api_key = os.getenv(key_env) if key_env else None
+    if api_key:
+        return provider, api_key
+    or_key = os.getenv("OPENROUTER_API_KEY")
+    if or_key:
+        return "openrouter", or_key
+    return provider, None
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -245,15 +284,15 @@ class EventTriggeredAgent:
                 api_key=api_key,
                 base_url="https://api.moonshot.cn/v1"
             )
-            self.model = model or "kimi-k2-0905-preview"
+            self.model = model or "kimi-k3"
         elif self.provider == "openrouter":
             self.client = OpenAI(
                 api_key=api_key,
                 base_url="https://openrouter.ai/api/v1"
             )
-            # Default to Gemini 2.5 Pro, but allow any of the supported models
-            self.model = model or "google/gemini-2.5-pro"
-            # Supported models: google/gemini-2.5-pro, openai/gpt-5, anthropic/claude-sonnet-4
+            # Default to Gemini 3.5 Flash, but allow any of the supported models
+            self.model = model or "google/gemini-3.5-flash"
+            # Supported models: google/gemini-3.5-flash, openai/gpt-5.6-luna, anthropic/claude-sonnet-4.6
         else:
             raise ValueError(f"Unsupported provider: {provider}. Use 'siliconflow', 'doubao', 'kimi', 'moonshot', or 'openrouter'")
         
@@ -1049,20 +1088,31 @@ Important: When you have completed all tasks, clearly state "FINAL ANSWER:" foll
                     messages=messages_to_send,
                     tools=self._get_tools_description(),
                     tool_choice="auto",
-                    temperature=self.config.temperature,
+                    temperature=_reasoning_safe_temperature(self.model, self.config.temperature),
                     max_tokens=self.config.max_tokens
                 )
                 
                 message = response.choices[0].message
-                
-                if message.content and "FINAL ANSWER:" in message.content:
-                    final_answer = message.content.split("FINAL ANSWER:")[1].strip()
-                    logger.info(f"✅ Final answer found: {final_answer[:100]}...")
+                has_tool_calls = bool(getattr(message, "tool_calls", None))
+
+                # Terminal path: a text reply with no tool calls ends the loop,
+                # even without the FINAL ANSWER: marker (e.g. a plain "hi"
+                # reply). Previously only "FINAL ANSWER:" broke the loop, so
+                # plain replies were re-sent for up to max_iterations.
+                if not has_tool_calls:
                     self.conversation_history.append(message.model_dump())
+                    content = (message.content or "").strip()
+                    if content:
+                        final_answer = (content.split("FINAL ANSWER:", 1)[1].strip()
+                                        if "FINAL ANSWER:" in content else content)
+                        logger.info(f"✅ Terminal text response (no tool calls); final answer: {final_answer[:100]}...")
+                    else:
+                        logger.warning("Empty model response with no tool calls; "
+                                       "stopping to avoid burning remaining iterations")
                     self._save_trajectory(iteration, final_answer)
                     break
-                
-                if hasattr(message, 'tool_calls') and message.tool_calls:
+
+                if has_tool_calls:
                     self.conversation_history.append(message.model_dump())
                     
                     for tool_call in message.tool_calls:
@@ -1140,9 +1190,14 @@ Important: When you have completed all tasks, clearly state "FINAL ANSWER:" foll
                             "tool_call_id": tool_call.id,
                             "content": tool_content
                         })
-                    
-                elif message.content:
-                    self.conversation_history.append(message.model_dump())
+
+                    # If the same turn also tagged FINAL ANSWER: (unusual with
+                    # tool calls), still stop after recording the tool results.
+                    if message.content and "FINAL ANSWER:" in message.content:
+                        final_answer = message.content.split("FINAL ANSWER:", 1)[1].strip()
+                        logger.info(f"✅ Final answer found alongside tool calls: {final_answer[:100]}...")
+                        self._save_trajectory(iteration, final_answer)
+                        break
                     
             except Exception as e:
                 logger.error(f"Error during event handling: {str(e)}")

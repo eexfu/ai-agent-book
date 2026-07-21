@@ -7,6 +7,11 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent))
 
@@ -119,10 +124,11 @@ def watch_llm_agent():
     
     # Check API key
     api_key = os.getenv("MOONSHOT_API_KEY")
-    if not api_key:
+    if not api_key and not os.getenv("OPENROUTER_API_KEY"):
         print("\nError: MOONSHOT_API_KEY not set.")
         print("Please set your Kimi API key:")
         print("  export MOONSHOT_API_KEY='your-key-here'")
+        print("Or set OPENROUTER_API_KEY as a universal fallback.")
         return
     
     agent = LLMAgent(api_key=api_key)

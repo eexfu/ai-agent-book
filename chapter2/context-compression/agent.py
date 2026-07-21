@@ -13,10 +13,18 @@ from openai import OpenAI
 from config import Config
 from web_tools import WebTools
 from compression_strategies import (
-    CompressionStrategy, 
+    CompressionStrategy,
     ContextCompressor,
     CompressedContent
 )
+
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format=Config.LOG_FORMAT)
@@ -67,11 +75,13 @@ class ResearchAgent:
             verbose: Enable verbose logging
             enable_streaming: Enable streaming responses
         """
+        # Moonshot 官方 key 存在则直连；否则回退 OpenRouter（见 Config.resolve_llm）。
+        resolved_key, resolved_base_url, resolved_model = Config.resolve_llm()
         self.client = OpenAI(
-            api_key=api_key,
-            base_url=Config.MOONSHOT_BASE_URL
+            api_key=resolved_key,
+            base_url=resolved_base_url
         )
-        self.model = Config.MODEL_NAME
+        self.model = resolved_model
         self.compression_strategy = compression_strategy
         self.verbose = verbose
         self.enable_streaming = enable_streaming
@@ -330,7 +340,7 @@ TODAY'S DATE: {date_string}"""
                 messages=messages,
                 tools=self._get_tools_description(),
                 tool_choice="auto",
-                temperature=Config.MODEL_TEMPERATURE,
+                temperature=_reasoning_safe_temperature(self.model, Config.MODEL_TEMPERATURE),
                 max_tokens=Config.MODEL_MAX_TOKENS,
                 stream=True,
                 stream_options={"include_usage": True}  # Request token usage in stream
@@ -425,7 +435,7 @@ TODAY'S DATE: {date_string}"""
             messages=messages,
             tools=self._get_tools_description(),
             tool_choice="auto",
-            temperature=Config.MODEL_TEMPERATURE,
+            temperature=_reasoning_safe_temperature(self.model, Config.MODEL_TEMPERATURE),
             max_tokens=Config.MODEL_MAX_TOKENS,
             stream=False
         )
@@ -508,7 +518,7 @@ TODAY'S DATE: {date_string}"""
                 
                 # Check if we're approaching token limit based on actual usage
                 if self.trajectory.total_tokens_used > 0:  # Only check after first call
-                    # Kimi has a 128k context window
+                    # Compression demo uses a 128k context budget
                     if self.trajectory.prompt_tokens_used > Config.CONTEXT_WINDOW_SIZE * 0.8:
                         logger.warning(f"Approaching context limit: {self.trajectory.prompt_tokens_used:,} prompt tokens used")
                         self.trajectory.context_overflows += 1

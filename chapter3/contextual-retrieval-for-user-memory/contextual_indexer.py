@@ -20,6 +20,15 @@ from contextual_chunking import ContextualConversationChunk, ContextualConversat
 from advanced_memory_manager import AdvancedMemoryManager, AdvancedMemoryCard
 from indexer import SearchResult
 
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -306,7 +315,7 @@ Extract memory cards:"""
                     {"role": "system", "content": "You are a memory extraction assistant. Extract structured information from conversations into memory cards."},
                     {"role": "user", "content": extraction_prompt}
                 ],
-                temperature=0.3,
+                temperature=_reasoning_safe_temperature(self._llm_model, 0.3),
                 response_format={"type": "json_object"}
             )
             
@@ -492,8 +501,8 @@ Extract memory cards:"""
             local_results = []
             
             for chunk_id, chunk in self.contextual_chunks.items():
-                # Search in contextualized text
-                if query_lower in chunk.contextualized_text.lower():
+                # Search in contextualized text (skip chunks with empty text)
+                if query_lower and chunk.contextualized_text and query_lower in chunk.contextualized_text.lower():
                     # Calculate a simple relevance score based on frequency
                     score = chunk.contextualized_text.lower().count(query_lower) / len(chunk.contextualized_text)
                     local_results.append((score, chunk_id, chunk))

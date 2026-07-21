@@ -5,6 +5,59 @@
 import os
 from typing import Optional
 
+
+def map_model_to_openrouter(model: str) -> str:
+    """Map a bare model id to an OpenRouter model id.
+    - ids already containing '/' -> left as-is
+    - gpt-*/o1-*/o3-*/o4-* -> 'openai/<id>'
+    - claude-* -> anthropic Claude (opus/sonnet/haiku)
+    - other native ids (kimi-*, doubao-*, ...) are NOT reliably on OpenRouter,
+      so fall back to OPENROUTER_MODEL or a safe default that always works.
+    """
+    m = (model or "").strip()
+    if "/" in m:
+        return m
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1-", "o3-", "o4-")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        if "sonnet" in ml:
+            return "anthropic/claude-sonnet-4.6"
+        if "haiku" in ml:
+            return "anthropic/claude-haiku-4.5"
+        return "anthropic/claude-opus-4.8"
+    if ml.startswith("kimi"):
+        # kimi-k3 is not on OpenRouter; moonshotai/kimi-k2.6 is the closest hosted id.
+        return "moonshotai/kimi-k2.6"
+    return os.getenv("OPENROUTER_MODEL", "openai/gpt-5.6-luna")
+
+
+def resolve_llm_backend(primary_key: str, primary_base_url: str, model: str):
+    """Universal OpenRouter fallback for LLM backend resolution.
+
+    Returns (api_key, base_url, model, using_openrouter).
+    - If the primary provider key is present, behavior is unchanged.
+    - Else if OPENROUTER_API_KEY is present, route through OpenRouter and map
+      the model id to an OpenRouter id.
+    - Else raise a clear error listing the accepted keys.
+    """
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    # gpt-5.x (incl. gpt-5.6*) needs OpenAI org-verification on the direct API;
+    # when an OpenRouter key is present, prefer routing these ids through it.
+    if openrouter_key and str(model or "").lower().startswith("gpt-5"):
+        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        return openrouter_key, base_url, map_model_to_openrouter(model), True
+    if primary_key:
+        return primary_key, primary_base_url, model, False
+    if openrouter_key:
+        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        return openrouter_key, base_url, map_model_to_openrouter(model), True
+    raise ValueError(
+        "No API key found. Set MOONSHOT_API_KEY / KIMI_API_KEY (primary) or "
+        "OPENROUTER_API_KEY (universal fallback)."
+    )
+
+
 class Config:
     """配置类"""
     
@@ -17,10 +70,10 @@ class Config:
     KIMI_BASE_URL: str = "https://api.moonshot.cn/v1"
     
     # 模型配置
-    DEFAULT_MODEL: str = "kimi-k2-0905-preview"  # 使用最新的 K2 模型
-    
+    DEFAULT_MODEL: str = "kimi-k3"  # 使用最新的 Kimi K3 模型
+
     # 搜索配置
-    MAX_SEARCH_ITERATIONS: int = 3  # 最大搜索迭代次数
+    MAX_SEARCH_ITERATIONS: int = 5  # 最大搜索迭代次数（与 agent 默认值保持一致）
     SEARCH_TIMEOUT: int = 30  # 搜索超时时间（秒）
     
     # 日志配置

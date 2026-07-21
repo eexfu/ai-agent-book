@@ -60,18 +60,53 @@ pip install -r requirements.txt
 
 ## 使用方法 (Usage)
 
-### 基础运行 (Basic Run)
+> 所有入口脚本均提供中文 `--help`：`python run_ablation.py --help`、`python analyze_results.py --help`。
+
+### 一键运行完整消融并输出对比表（推荐）
+
+`--all` 会在同一个进程内依次运行基线 + 三个维度的单独消融 + 全部叠加，跑完后直接打印成功率对比表，并把汇总统计写入 `--output`（默认 `log-dir/ablation_summary_<时间戳>.json`）。这是复现书中"实验 2-4"结论最直接的方式：
+
+```bash
+python run_ablation.py \
+    --model gpt-5.6-luna \
+    --env airline \
+    --end-index 10 \
+    --all
+# 说明：默认使用 OpenAI 直连（provider=openai），需设置 OPENAI_API_KEY。
+#       如需走 OpenRouter，把模型写成带斜杠的 id（如 openai/gpt-5），
+#       脚本会自动选择 openrouter provider（需 OPENROUTER_API_KEY）。
+#       通用回退：即使模型是 bare id（如 gpt-4o-mini），只要未设 OPENAI_API_KEY
+#       而设了 OPENROUTER_API_KEY，脚本会自动把它前缀成 openai/gpt-4o-mini 并
+#       切到 openrouter provider。
+```
+
+跑完后会打印如下成功率对比表。下面是一次**真实运行**的输出（`--model gpt-4o --env airline --end-index 4`，即每组仅 4 个任务的冒烟样本），仅用于展示表格形态：
+
+```
+Experiment                        Success Rate      Tasks        Relative
+----------------------------------------------------------------------
+wiki_random                      50.0%         2/  4      200.0%
+baseline                         25.0%         1/  4      100.0%  ⭐
+tone_trump                       25.0%         1/  4      100.0%
+tone_casual                      25.0%         1/  4      100.0%
+no_tool_desc                      0.0%         0/  4        0.0%
+all_ablations                     0.0%         0/  4        0.0%
+```
+
+> ⚠️ 上表每组只有 4 个任务，样本量极小、噪声很大——例如 `wiki_random` 这一次偶然高于 `baseline`，这是小样本波动，并非真实结论。方向性信号（移除工具描述 → 0%、全部叠加 → 0%、语气对成功率无影响）与书中"实验 2-4"一致，但要得到稳定的量化结论（如"信息组织混乱导致成功率下降 30% 以上"），请把 `--end-index` 提高到 10 及以上并多跑几个 `--seed`。请以你自己的完整运行结果为准，不要直接引用这里的冒烟数字。
+
+### 基础运行：单个配置 (Basic Run)
 
 运行基线实验（无消融）：
 
 ```bash
 python run_ablation.py \
-    --model openai/gpt-5 \
+    --model gpt-5.6-luna \
     --env airline \
     --task-split test \
     --start-index 0 \
     --end-index 10
-# Note: Provider will be automatically set to 'openrouter' for openai/gpt-5
+# Note: bare model ids (gpt-4o-mini) use OpenAI direct; ids with '/' auto-select openrouter
 ```
 
 ### 语气消融实验 (Tone Ablation)
@@ -79,7 +114,7 @@ python run_ablation.py \
 #### Trump 风格
 ```bash
 python run_ablation.py \
-    --model openai/gpt-5 \
+    --model gpt-5.6-luna \
     --env airline \
     --tone-style trump \
     --ablation-name trump_tone
@@ -88,7 +123,7 @@ python run_ablation.py \
 #### 休闲风格
 ```bash
 python run_ablation.py \
-    --model openai/gpt-5 \
+    --model gpt-5.6-luna \
     --env airline \
     --tone-style casual \
     --ablation-name casual_tone
@@ -98,7 +133,7 @@ python run_ablation.py \
 
 ```bash
 python run_ablation.py \
-    --model openai/gpt-5 \
+    --model gpt-5.6-luna \
     --env airline \
     --randomize-wiki \
     --ablation-name wiki_random
@@ -108,7 +143,7 @@ python run_ablation.py \
 
 ```bash
 python run_ablation.py \
-    --model openai/gpt-5 \
+    --model gpt-5.6-luna \
     --env airline \
     --remove-tool-descriptions \
     --ablation-name no_tool_desc
@@ -120,7 +155,7 @@ python run_ablation.py \
 
 ```bash
 python run_ablation.py \
-    --model openai/gpt-5 \
+    --model gpt-5.6-luna \
     --env airline \
     --tone-style casual \
     --randomize-wiki \
@@ -132,49 +167,40 @@ python run_ablation.py \
 
 ### 运行完整消融研究
 
-创建 `run_full_ablation.sh`:
+有两种等价方式跑完整套消融：
+
+1. **Python 一键模式（推荐）**：`python run_ablation.py --env airline --end-index 10 --all`，单进程内跑完并直接打印对比表。
+2. **Bash 编排脚本**：仓库已附带 `run_full_ablation.sh`，它逐个调用 `run_ablation.py` 再自动调用 `analyze_results.py` 汇总：
 
 ```bash
-#!/bin/bash
-
-MODEL="openai/gpt-5"
-# Provider will be auto-detected (openrouter for openai/gpt-5)
-ENV="airline"
-
-# Baseline
-echo "Running baseline..."
-python run_ablation.py --model $MODEL --env $ENV --ablation-name baseline
-
-# Tone variations
-echo "Running tone ablations..."
-python run_ablation.py --model $MODEL --env $ENV --tone-style trump --ablation-name tone_trump
-python run_ablation.py --model $MODEL --env $ENV --tone-style casual --ablation-name tone_casual
-
-# Wiki randomization
-echo "Running wiki randomization..."
-python run_ablation.py --model $MODEL --env $ENV --randomize-wiki --ablation-name wiki_random
-
-# Tool description removal
-echo "Running tool description removal..."
-python run_ablation.py --model $MODEL --env $ENV --remove-tool-descriptions --ablation-name no_tools
-
-# Worst case - all ablations
-echo "Running worst case scenario..."
-python run_ablation.py --model $MODEL --env $ENV \
-    --tone-style casual --randomize-wiki --remove-tool-descriptions --ablation-name worst_case
-
-echo "All experiments complete!"
+# 默认 10 个任务/实验；--quick 用 3 个任务快速冒烟
+./run_full_ablation.sh --model gpt-5.6-luna --env airline --num-tasks 10
+./run_full_ablation.sh --quick
 ```
 
 ## 结果分析 (Result Analysis)
 
-结果保存在 `results_ablation/` 目录，包含：
+每个实验的原始轨迹保存在 `results_ablation/` 目录，包含：
 
 - **task_id**: 任务标识
 - **reward**: 成功率（0 或 1）
 - **info**: 详细执行信息
 - **traj**: 完整对话轨迹
 - **ablation_config**: 使用的消融配置
+
+### 汇总分析脚本
+
+`analyze_results.py` 会扫描结果目录，按实验名聚合成功率并打印对比表、消融因子影响分析和 ASCII 柱状图：
+
+```bash
+# 分析默认目录
+python analyze_results.py
+
+# 指定目录并把汇总统计写入 JSON
+python analyze_results.py --results-dir results_ablation --output summary.json
+```
+
+> 注意：`--all` 模式已在运行结束时直接打印同样的对比表，`analyze_results.py` 适用于事后重新汇总或分析历史/手动运行的结果。仓库中随附的 `results_ablation/*.json` 是少量任务（1~6 个）的调试样本，仅用于演示数据格式，**样本量不足以得出统计结论**，请以你自己完整运行（如 `--end-index 10` 及以上）的结果为准。
 
 ## 预期结果 (Expected Results)
 
@@ -210,13 +236,15 @@ echo "All experiments complete!"
 
 | 参数 | 说明 | 选项 |
 |------|------|------|
-| `--tone-style` | 语气风格（应用到系统提示） | default, trump, casual |
-| `--randomize-wiki` | 随机化wiki规则 | flag |
-| `--remove-tool-descriptions` | 移除工具描述 | flag |
+| `--tone-style` | 维度一·语气风格（应用到系统提示） | default, trump, casual |
+| `--randomize-wiki` | 维度二·随机化wiki规则组织结构 | flag |
+| `--remove-tool-descriptions` | 维度三·移除工具描述 | flag |
+| `--all` | 一键运行完整消融套件并打印对比表 | flag |
+| `--output` | （仅 --all）汇总统计 JSON 输出路径 | string |
 | `--ablation-name` | 实验名称标识 | string |
 | `--env` | 环境选择 | airline, retail |
-| `--model` | 使用的模型 | string (e.g., openai/gpt-5) |
-| `--model-provider` | 模型提供商（可选） | 自动检测（openai/gpt-5使用openrouter） |
+| `--model` | 使用的模型 | string (e.g., gpt-4o-mini, gpt-4o) |
+| `--model-provider` | 模型提供商（可选） | 自动检测（裸 id 用 openai，带 / 的 id 用 openrouter） |
 | `--task-split` | 任务集 | train, test, dev |
 | `--start-index` | 起始任务索引 | integer |
 | `--end-index` | 结束任务索引 | integer |

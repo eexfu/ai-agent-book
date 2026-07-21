@@ -10,9 +10,17 @@ from dataclasses import dataclass
 from datetime import datetime
 import uuid
 from openai import OpenAI
-from config import Config
+from config import Config, openrouter_model_id, PROVIDER_DEFAULT_MODELS
 from conversation_history import ConversationHistory, ConversationTurn
 from memory_manager import create_memory_manager, BaseMemoryManager, MemoryMode
+
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -65,9 +73,20 @@ class ConversationalAgent:
         
         # Get API key for provider
         api_key = api_key or Config.get_api_key(self.provider)
+
+        # Universal OpenRouter fallback: primary provider key absent but
+        # OPENROUTER_API_KEY present -> route this agent through OpenRouter.
+        if not api_key and self.provider != "openrouter" and Config.OPENROUTER_API_KEY:
+            model = openrouter_model_id(model or PROVIDER_DEFAULT_MODELS.get(self.provider))
+            self.provider = "openrouter"
+            api_key = Config.OPENROUTER_API_KEY
+
         if not api_key:
-            raise ValueError(f"API key required for provider '{self.provider}'. Check environment variables.")
-        
+            raise ValueError(
+                f"API key required for provider '{self.provider}'. Set the "
+                f"provider's key or OPENROUTER_API_KEY to use the OpenRouter fallback."
+            )
+
         # Configure client based on provider
         if self.provider == "siliconflow":
             self.client = OpenAI(
@@ -86,15 +105,15 @@ class ConversationalAgent:
                 api_key=api_key,
                 base_url="https://api.moonshot.cn/v1"
             )
-            self.model = model or "kimi-k2-0905-preview"
+            self.model = model or "kimi-k3"
         elif self.provider == "openrouter":
             self.client = OpenAI(
                 api_key=api_key,
                 base_url="https://openrouter.ai/api/v1"
             )
             # Default to Gemini 2.5 Pro, but allow any of the supported models
-            self.model = model or "google/gemini-2.5-pro"
-            # Supported models: google/gemini-2.5-pro, openai/gpt-5, anthropic/claude-sonnet-4
+            self.model = model or "google/gemini-3.5-flash"
+            # Supported models: google/gemini-3.5-flash, openai/gpt-5, anthropic/claude-sonnet-4
         else:
             raise ValueError(f"Unsupported provider: {self.provider}. Use 'siliconflow', 'doubao', 'kimi', 'moonshot', or 'openrouter'")
         
@@ -206,7 +225,7 @@ You MUST analyze the context, user's questions and memories in detail, and provi
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=self.conversation,
-                temperature=self.config.temperature,
+                temperature=_reasoning_safe_temperature(self.model, self.config.temperature),
                 max_tokens=self.config.max_tokens,
                 stream=True
             )

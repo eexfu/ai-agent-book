@@ -229,3 +229,14 @@ class TestNotebookEditTool:
         assert "error" in result.data
         assert "cell_id required" in result.data["error"]
 
+    def test_delete_without_new_source(self, system_state, sample_notebook):
+        """Delete must work when new_source is omitted."""
+        tool = NotebookEditTool(system_state)
+        result = tool.execute({
+            "notebook_path": str(sample_notebook),
+            "cell_id": "cell-1",
+            "edit_mode": "delete",
+        })
+        assert result.success
+        assert result.data["action"] == "deleted"
+

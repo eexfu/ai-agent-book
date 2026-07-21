@@ -27,7 +27,10 @@ class BashTool(BaseTool):
         - Output truncated if exceeds 30000 characters
         """
         command = params["command"]
-        timeout = params.get("timeout", 120000) / 1000  # Convert ms to seconds
+        timeout_ms = params.get("timeout")
+        if timeout_ms is None:
+            timeout_ms = 120000
+        timeout = timeout_ms / 1000  # Convert ms to seconds
         run_in_background = params.get("run_in_background", False)
         
         # Get or create shell session
@@ -45,8 +48,10 @@ class BashTool(BaseTool):
             # Start background process
             bg_id = f"bg_{int(time.time())}_{hashlib.md5(command.encode()).hexdigest()[:8]}"
             session.start()
-            # Launch command in background using nohup
-            bg_command = f"nohup {command} > /tmp/{bg_id}.log 2>&1 & echo $!"
+            # Launch command in background; the subshell grouping ensures the
+            # redirect covers the whole command (incl. && / || chains), so all
+            # output lands in the log file instead of leaking to this session.
+            bg_command = f"( {command} ) > /tmp/{bg_id}.log 2>&1 & echo $!"
             output, exit_code = session.execute(bg_command, timeout=5)
             
             return {

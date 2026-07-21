@@ -3,44 +3,55 @@
 Analyze and visualize ablation study results
 """
 
+import argparse
 import json
 import glob
+import re
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Tuple
 import sys
 
 
+def _extract_experiment_name(filename: str) -> str:
+    """
+    Recover the ablation name from a result filename.
+
+    Filenames follow the pattern produced by run_ablation.py:
+        ``{strategy}-{model}-{ablation_str}_{timestamp}.json``
+    e.g. ``tool-calling-gpt-5-tone_trump_0917203842`` -> ``tone_trump``.
+
+    The model segment itself may contain ``-`` (e.g. ``gpt-5``), so we strip
+    the trailing ``_<timestamp>`` first, then take everything after the last
+    ``-`` as the ablation name.
+    """
+    # Strip a trailing timestamp such as ``_0917203842`` (>=6 digits).
+    stripped = re.sub(r"_\d{6,}$", "", filename)
+    # The ablation name is the final hyphen-separated segment.
+    return stripped.rsplit("-", 1)[-1]
+
+
 def load_results(results_dir: str = "results_ablation") -> Dict[str, List[float]]:
     """
     Load all results from the results directory
-    
+
     Returns:
         Dictionary mapping experiment names to lists of rewards
     """
     results = {}
-    
-    for file_path in glob.glob(f"{results_dir}/*.json"):
+
+    for file_path in sorted(glob.glob(f"{results_dir}/*.json")):
+        # Skip auxiliary/aggregate files that are not raw run outputs.
+        if Path(file_path).name in ("visualization_data.json", "summary.json"):
+            continue
         try:
             with open(file_path, 'r') as f:
                 data = json.load(f)
-            
+
             # Extract experiment name from filename
             filename = Path(file_path).stem
-            parts = filename.split('-')
-            
-            # Try to find ablation name in filename
-            if '_' in filename:
-                # Find the ablation name part
-                for part in parts:
-                    if any(x in part for x in ['baseline', 'tone', 'wiki', 'tool', 'ablation']):
-                        exp_name = part
-                        break
-                else:
-                    exp_name = filename
-            else:
-                exp_name = filename
-            
+            exp_name = _extract_experiment_name(filename)
+
             # Handle different data formats
             if isinstance(data, dict) and 'results' in data:
                 # New format with ablation config
@@ -63,13 +74,13 @@ def load_results(results_dir: str = "results_ablation") -> Dict[str, List[float]
                         exp_name = '_'.join(name_parts)
                     else:
                         exp_name = 'baseline'
-                
-                results[exp_name] = rewards
-                
+
+                results.setdefault(exp_name, []).extend(rewards)
+
             elif isinstance(data, list):
                 # Old format - list of results
                 rewards = [r.get('reward', 0) for r in data]
-                results[exp_name] = rewards
+                results.setdefault(exp_name, []).extend(rewards)
                 
         except Exception as e:
             print(f"Warning: Could not load {file_path}: {e}")
@@ -202,7 +213,10 @@ def analyze_ablation_impact(results: Dict[str, List[float]]):
                     severity = "🟢 Low"
                 
                 impacts.append((factor_name, impact, relative_impact, severity))
-                print(f"{factor_name:<25} {f'-{impact:.1f}%':>20} ({relative_impact:.1f}%) {severity:>15}")
+                # `impact` is baseline - experiment: positive = degradation (show as
+                # e.g. "-25.0%"), negative = the ablation outperformed baseline (small
+                # samples can do this) and should read as "+25.0%", not "--25.0%".
+                print(f"{factor_name:<25} {f'{-impact:+.1f}%':>20} ({relative_impact:.1f}%) {severity:>15}")
                 break
     
     print("-"*70)
@@ -268,7 +282,7 @@ def generate_summary_report(results: Dict[str, List[float]]):
     print("\n" + "="*80)
 
 
-def create_visualization_data(results: Dict[str, List[float]]):
+def create_visualization_data(results: Dict[str, List[float]], results_dir: str = "results_ablation"):
     """
     Create data for visualization (can be used with plotting libraries)
     """
@@ -277,19 +291,20 @@ def create_visualization_data(results: Dict[str, List[float]]):
         'success_rates': [],
         'sample_sizes': []
     }
-    
+
     stats = {name: calculate_statistics(rewards) for name, rewards in results.items()}
-    
+
     for name, stat in sorted(stats.items(), key=lambda x: x[1]['success_rate'], reverse=True):
         viz_data['experiments'].append(name)
         viz_data['success_rates'].append(stat['success_rate'])
         viz_data['sample_sizes'].append(stat['total'])
-    
+
     # Save for potential plotting
-    with open('results_ablation/visualization_data.json', 'w') as f:
+    viz_path = Path(results_dir) / "visualization_data.json"
+    with open(viz_path, 'w') as f:
         json.dump(viz_data, f, indent=2)
-    
-    print("\n💾 Visualization data saved to results_ablation/visualization_data.json")
+
+    print(f"\n💾 Visualization data saved to {viz_path}")
     
     # Print ASCII bar chart
     print("\n📊 Performance Bar Chart:")
@@ -302,26 +317,64 @@ def create_visualization_data(results: Dict[str, List[float]]):
         print(f"{exp[:20]:<20} |{bar}| {rate:.1f}%")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="汇总分析提示工程消融实验结果，打印成功率对比表并生成图表数据。",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例：\n"
+            "  # 分析默认结果目录\n"
+            "  python analyze_results.py\n\n"
+            "  # 分析指定目录并把汇总写入 JSON\n"
+            "  python analyze_results.py --results-dir results_ablation --output summary.json\n"
+        ),
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default="results_ablation",
+        help="存放各消融实验结果 JSON 的目录（默认：results_ablation）",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="（可选）将汇总统计写入该 JSON 文件路径",
+    )
+    return parser.parse_args()
+
+
 def main():
     """
     Main analysis function
     """
+    args = parse_args()
+
     print("\n🔍 Analyzing Ablation Study Results...")
-    
+
     # Load results
-    results = load_results()
-    
+    results = load_results(args.results_dir)
+
     if not results:
-        print("\n❌ No results found in results_ablation/")
+        print(f"\n❌ No results found in {args.results_dir}/")
         print("Please run experiments first using:")
-        print("  python run_ablation.py --model gpt-5 --model-provider openai --env airline")
+        print("  python run_ablation.py --model gpt-5.6-luna --env airline --all")
         sys.exit(1)
-    
+
     # Run all analyses
     print_results_table(results)
     analyze_ablation_impact(results)
     generate_summary_report(results)
-    create_visualization_data(results)
+    create_visualization_data(results, args.results_dir)
+
+    # Optionally persist the aggregated statistics
+    if args.output:
+        summary = {
+            name: calculate_statistics(rewards) for name, rewards in results.items()
+        }
+        with open(args.output, "w") as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        print(f"\n💾 Summary statistics saved to {args.output}")
     
     print("\n✅ Analysis complete!")
     print("\n" + "="*80)

@@ -1,6 +1,7 @@
 """Configuration management for Collaboration Tools MCP Server."""
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -8,6 +9,19 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var; fall back to default (with a warning) if malformed."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"Warning: invalid {name}={raw!r} (must be an integer); using default {default}",
+              file=sys.stderr)
+        return default
 
 
 class BrowserConfig(BaseModel):
@@ -64,11 +78,11 @@ def load_config() -> Config:
         browser=BrowserConfig(
             headless=os.getenv("BROWSER_HEADLESS", "false").lower() == "true",
             user_data_dir=os.getenv("BROWSER_USER_DATA_DIR", "~/.config/collaboration-tools/browser"),
-            timeout=int(os.getenv("BROWSER_TIMEOUT", "30000"))
+            timeout=_env_int("BROWSER_TIMEOUT", 30000)
         ),
         email=EmailConfig(
             smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com"),
-            smtp_port=int(os.getenv("SMTP_PORT", "587")),
+            smtp_port=_env_int("SMTP_PORT", 587),
             smtp_username=os.getenv("SMTP_USERNAME"),
             smtp_password=os.getenv("SMTP_PASSWORD"),
             smtp_from_email=os.getenv("SMTP_FROM_EMAIL"),
@@ -84,7 +98,7 @@ def load_config() -> Config:
         hitl=HITLConfig(
             admin_email=os.getenv("HITL_ADMIN_EMAIL"),
             webhook_url=os.getenv("HITL_WEBHOOK_URL"),
-            timeout_seconds=int(os.getenv("HITL_TIMEOUT_SECONDS", "3600"))
+            timeout_seconds=_env_int("HITL_TIMEOUT_SECONDS", 3600)
         ),
         timer=TimerConfig(
             storage_path=os.getenv("TIMER_STORAGE_PATH", "~/.config/collaboration-tools/timers.json")

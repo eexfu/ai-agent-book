@@ -1,0 +1,5 @@
+# 实验 10-8 依赖
+openai>=1.40.0
+python-dotenv>=1.0.0
+# 语音（--voice）用 OpenAI tts-1，无需额外依赖；
+# macOS 上 --play 播放用系统自带的 afplay。

@@ -22,7 +22,7 @@ from google.genai import types
 # OpenAI imports
 from openai import OpenAI, AsyncOpenAI
 
-from config import Config, ExtractionMode, Provider, ModelConfig
+from config import Config, ExtractionMode, Provider, ModelConfig, _openrouter_model_id
 
 
 @dataclass
@@ -56,7 +56,21 @@ class MultimodalContent:
     mime_type: Optional[str] = None
     extracted_text: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
+    def __post_init__(self):
+        # 自动补全 MIME 类型：优先按文件名推断，再按声明的模态兜底。
+        # 否则原生 OpenAI / Doubao 图像请求会拼出 "data:None;base64,..." 导致 400 错误。
+        if not self.mime_type and self.path:
+            guessed = mimetypes.guess_type(self.path)[0]
+            if guessed:
+                self.mime_type = guessed
+        if not self.mime_type:
+            self.mime_type = {
+                "pdf": "application/pdf",
+                "image": "image/jpeg",
+                "audio": "audio/mpeg",
+            }.get(self.type)
+
     def get_bytes(self) -> bytes:
         """Get content as bytes"""
         if self.data:
@@ -117,9 +131,18 @@ class MultimodalTools:
         return await self._analyze_with_gemini_pdf(content, query)
         
     async def _analyze_with_openai(self, content: MultimodalContent, query: str) -> str:
-        """Use OpenAI for content analysis"""
-        client = AsyncOpenAI(api_key=self.agent.config.openai_api_key)
-        
+        """Use OpenAI (or OpenRouter fallback) for content analysis"""
+        cfg = self.agent.config
+        # 视觉默认 gpt-5.6-luna（视觉可用）；直连 gpt-5.6 需组织实名，故有 OpenRouter key 时优先走 OpenRouter
+        if cfg.openrouter_api_key:
+            client = AsyncOpenAI(api_key=cfg.openrouter_api_key, base_url=cfg.openrouter_base_url)
+            model = _openrouter_model_id("gpt-5.6-luna")
+        elif cfg.openai_api_key:
+            client = AsyncOpenAI(api_key=cfg.openai_api_key)
+            model = "gpt-5.6-luna"
+        else:
+            raise RuntimeError("需要 OPENAI_API_KEY 或 OPENROUTER_API_KEY 才能进行视觉分析")
+
         messages = [{
             "role": "user",
             "content": [
@@ -132,13 +155,13 @@ class MultimodalTools:
                 }
             ]
         }]
-        
+
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=messages,
             temperature=self.agent.config.temperature
         )
-        
+
         return response.choices[0].message.content
         
     async def _analyze_with_doubao(self, content: MultimodalContent, query: str) -> str:
@@ -183,7 +206,7 @@ class MultimodalTools:
         )
         
         response = client.models.generate_content(
-            model='gemini-2.5-pro',
+            model='gemini-3.5-flash',
             contents=[
                 query,
                 types.Part.from_bytes(
@@ -237,7 +260,7 @@ class MultimodalTools:
         )
         
         response = client.models.generate_content(
-            model='gemini-2.5-pro',
+            model='gemini-3.5-flash',
             contents=[
                 types.Part.from_bytes(
                     data=pdf_data,
@@ -393,7 +416,12 @@ class MultimodalAgent:
         
         if not model_config.supports_native_multimodal:
             raise ValueError(f"Model {self.current_model} doesn't support native multimodality")
-            
+
+        # Universal OpenRouter fallback: the model's own provider key is missing
+        # but OPENROUTER_API_KEY is present -> route via OpenRouter (OpenAI-compat).
+        if self.config.use_openrouter(model_config.provider):
+            return await self._process_native_openrouter(model_config, content, query)
+
         if model_config.provider == Provider.GEMINI:
             return await self._process_native_gemini(content, query)
         elif model_config.provider == Provider.OPENAI:
@@ -402,6 +430,35 @@ class MultimodalAgent:
             return await self._process_native_doubao(content, query)
         else:
             raise ValueError(f"Unknown provider: {model_config.provider}")
+
+    async def _process_native_openrouter(self, model_config: ModelConfig, content: MultimodalContent, query: Optional[str]) -> str:
+        """Process content via OpenRouter's OpenAI-compatible endpoint.
+        Images are sent as native vision input; other types are extracted to
+        text first (OpenRouter has no audio-transcription / native-PDF path)."""
+        client_kwargs, model_name = self.config.openai_client_args(model_config)
+        client = AsyncOpenAI(**client_kwargs)
+
+        message_content = []
+        if query:
+            message_content.append({"type": "text", "text": query})
+
+        if content.type == "image":
+            message_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{content.mime_type};base64,{content.get_base64()}"
+                }
+            })
+        else:
+            extracted = await self._extract_single_content(content)
+            message_content.append({"type": "text", "text": extracted})
+
+        response = await client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": message_content}],
+            temperature=self.config.temperature
+        )
+        return response.choices[0].message.content
             
     async def _process_native_gemini(self, content: MultimodalContent, query: Optional[str]) -> str:
         """Process using Gemini's native multimodal API with thinking mode"""
@@ -441,7 +498,7 @@ class MultimodalAgent:
         )
             
         response = client.models.generate_content(
-            model='gemini-2.5-pro',
+            model='gemini-3.5-flash',
             contents=contents,
             config=config
         )
@@ -565,7 +622,7 @@ class MultimodalAgent:
         )
         
         response = client.models.generate_content(
-            model='gemini-2.5-pro',
+            model='gemini-3.5-flash',
             contents=[
                 types.Part.from_bytes(
                     data=pdf_data,
@@ -606,16 +663,24 @@ class MultimodalAgent:
         
     async def _extract_image_to_text(self, content: MultimodalContent) -> str:
         """Extract image to text description"""
-        # Use GPT-4o or Doubao for image description
-        if self.config.openai_api_key:
+        # 图像转文本：gpt-5.6-luna（优先 OpenRouter，直连 5.6 需组织实名）/ Doubao / OpenRouter 兜底
+        if self.config.openrouter_api_key:
+            client = AsyncOpenAI(
+                api_key=self.config.openrouter_api_key,
+                base_url=self.config.openrouter_base_url
+            )
+            model = _openrouter_model_id("gpt-5.6-luna")
+        elif self.config.openai_api_key:
             client = AsyncOpenAI(api_key=self.config.openai_api_key)
-            model = "gpt-4o"
-        else:
+            model = "gpt-5.6-luna"
+        elif self.config.doubao_api_key:
             client = AsyncOpenAI(
                 api_key=self.config.doubao_api_key,
                 base_url=self.config.models["doubao-1.6"].base_url
             )
             model = "Doubao-1.6"
+        else:
+            raise RuntimeError("需要 OPENAI_API_KEY / OPENROUTER_API_KEY / DOUBAO_API_KEY 才能进行图像转文本")
             
         messages = [{
             "role": "user",
@@ -676,7 +741,7 @@ class MultimodalAgent:
             )
             
             response = client.models.generate_content(
-                model='gemini-2.5-pro',
+                model='gemini-3.5-flash',
                 contents=[
                     "Transcribe this audio content completely and accurately.",
                     types.Part.from_bytes(
@@ -705,7 +770,18 @@ class MultimodalAgent:
         model_config = self.config.get_model_config(self.current_model)
         
         prompt = f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer:"
-        
+
+        # Universal OpenRouter fallback (primary provider key absent).
+        if self.config.use_openrouter(model_config.provider):
+            client_kwargs, model_name = self.config.openai_client_args(model_config)
+            client = AsyncOpenAI(**client_kwargs)
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.config.temperature
+            )
+            return response.choices[0].message.content
+
         if model_config.provider == Provider.GEMINI:
             client = genai.Client(api_key=self.config.gemini_api_key)
             
@@ -785,7 +861,11 @@ class MultimodalAgent:
             
     async def _stream_response(self, model_config: ModelConfig, multimodal_content: Optional[MultimodalContent] = None) -> AsyncGenerator[str, None]:
         """Stream response from the model"""
-        if model_config.provider == Provider.GEMINI:
+        # Universal OpenRouter fallback -> use the OpenAI-compatible stream path.
+        if self.config.use_openrouter(model_config.provider):
+            async for chunk in self._stream_openai_response(model_config):
+                yield chunk
+        elif model_config.provider == Provider.GEMINI:
             async for chunk in self._stream_gemini_response(multimodal_content):
                 yield chunk
         else:
@@ -899,21 +979,16 @@ class MultimodalAgent:
         self.add_message(Message(role="assistant", content=full_response))
         
     async def _stream_openai_response(self, model_config: ModelConfig) -> AsyncGenerator[str, None]:
-        """Stream response from OpenAI-compatible API"""
-        if model_config.provider == Provider.OPENAI:
-            client = AsyncOpenAI(api_key=self.config.openai_api_key)
-        else:  # Doubao
-            client = AsyncOpenAI(
-                api_key=self.config.doubao_api_key,
-                base_url=model_config.base_url
-            )
-            
+        """Stream response from OpenAI-compatible API (direct or via OpenRouter)"""
+        client_kwargs, model_name = self.config.openai_client_args(model_config)
+        client = AsyncOpenAI(**client_kwargs)
+
         # Convert conversation history to OpenAI format
         messages = [msg.to_dict() for msg in self.conversation_history]
-        
+
         # Add tools if enabled
         kwargs = {
-            "model": model_config.model_name,
+            "model": model_name,
             "messages": messages,
             "temperature": self.config.temperature,
             "stream": True
@@ -984,23 +1059,29 @@ class MultimodalAgent:
     async def _execute_tool(self, tool_call: Dict[str, Any]) -> str:
         """Execute a tool call"""
         function_name = tool_call["function"]["name"]
-        arguments = json.loads(tool_call["function"]["arguments"])
+        try:
+            arguments = json.loads(tool_call["function"]["arguments"])
+        except json.JSONDecodeError:
+            return f"Error: invalid JSON arguments for tool '{function_name}'"
         
         if function_name == "analyze_image":
-            return await self.tools.analyze_image(
-                arguments["image_path"],
-                arguments["query"]
-            )
+            image_path = arguments.get("image_path")
+            query = arguments.get("query")
+            if not image_path or not query:
+                return "Error: analyze_image requires 'image_path' and 'query' arguments"
+            return await self.tools.analyze_image(image_path, query)
         elif function_name == "analyze_audio":
-            return await self.tools.analyze_audio(
-                arguments["audio_path"],
-                arguments["query"]
-            )
+            audio_path = arguments.get("audio_path")
+            query = arguments.get("query")
+            if not audio_path or not query:
+                return "Error: analyze_audio requires 'audio_path' and 'query' arguments"
+            return await self.tools.analyze_audio(audio_path, query)
         elif function_name == "analyze_pdf":
-            return await self.tools.analyze_pdf(
-                arguments["pdf_path"],
-                arguments["query"]
-            )
+            pdf_path = arguments.get("pdf_path")
+            query = arguments.get("query")
+            if not pdf_path or not query:
+                return "Error: analyze_pdf requires 'pdf_path' and 'query' arguments"
+            return await self.tools.analyze_pdf(pdf_path, query)
         else:
             return f"Unknown tool: {function_name}"
             

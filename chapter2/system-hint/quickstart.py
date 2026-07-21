@@ -13,7 +13,7 @@ def main():
     """Quick start demonstration"""
     
     # Check for API key
-    api_key = os.getenv("KIMI_API_KEY")
+    api_key = os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("❌ Error: Please set KIMI_API_KEY environment variable")
         print("\nSetup instructions:")

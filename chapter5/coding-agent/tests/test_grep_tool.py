@@ -209,8 +209,10 @@ class TestGrepTool:
             "path": str(sample_files["temp_dir"])
         })
         
-        assert not result.success
+        # Tool-level errors are reported in data (success stays True unless
+        # _execute_impl raises) — same convention as all other error tests.
         assert "error" in result.data
+        assert "invalid regex" in result.data["error"].lower()
     
     def test_nonexistent_path(self, system_state):
         """Test searching in nonexistent path"""
@@ -234,3 +236,49 @@ class TestGrepTool:
         assert result.success
         assert "ERROR" in result.data["output"]
 
+    def test_null_context_before_like_omit(self, system_state, sample_files):
+        """Explicit JSON null -B must behave like omit (default 0)."""
+        tool = GrepTool(system_state)
+        result = tool.execute({
+            "pattern": "ERROR",
+            "path": str(sample_files["text_file1"]),
+            "output_mode": "content",
+            "-B": None,
+        })
+        assert result.success
+        assert "ERROR" in result.data["output"]
+
+    def test_null_context_after_like_omit(self, system_state, sample_files):
+        """Explicit JSON null -A must behave like omit (default 0)."""
+        tool = GrepTool(system_state)
+        result = tool.execute({
+            "pattern": "ERROR",
+            "path": str(sample_files["text_file1"]),
+            "output_mode": "content",
+            "-A": None,
+        })
+        assert result.success
+        assert "ERROR" in result.data["output"]
+
+    def test_null_context_around_like_omit(self, system_state, sample_files):
+        """Explicit JSON null -C must behave like omit (default 0)."""
+        tool = GrepTool(system_state)
+        result = tool.execute({
+            "pattern": "ERROR",
+            "path": str(sample_files["text_file1"]),
+            "output_mode": "content",
+            "-C": None,
+        })
+        assert result.success
+        assert "ERROR" in result.data["output"]
+
+    def test_null_path_like_omit(self, system_state, sample_files):
+        """Explicit JSON null path must behave like omit (default search root)."""
+        tool = GrepTool(system_state)
+        result = tool.execute({
+            "pattern": "ERROR",
+            "path": None,
+            "output_mode": "content",
+        })
+        assert result.success
+        assert "error" not in result.data

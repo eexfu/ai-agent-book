@@ -269,81 +269,162 @@ Examples:
                 print(f"❌ An error occurred: {str(e)}")
 
 
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(
-        description="GPT-5 Native Tools Agent - Web Search & Code Interpreter"
+def _run_single(args):
+    """执行单次请求（single / dry-run 模式），打印可读轨迹并按需保存结果。"""
+    # dry-run 只组装请求体、不联网，因此无需真实 API Key
+    api_key = Config.OPENROUTER_API_KEY or ("sk-or-DRYRUN-PLACEHOLDER" if args.dry_run else "")
+
+    agent = GPT5NativeAgent(
+        api_key=api_key,
+        base_url=Config.OPENROUTER_BASE_URL,
+        model=args.model or Config.MODEL_NAME
     )
-    
+
+    result = agent.process_request(
+        args.request,
+        use_tools=not args.no_tools,
+        temperature=Config.DEFAULT_TEMPERATURE,
+        max_tokens=Config.DEFAULT_MAX_TOKENS,
+        reasoning_effort=args.reasoning,
+        verbosity=args.verbosity,
+        dry_run=args.dry_run
+    )
+
+    # dry-run：打印将要发送给模型的完整请求体（原生工具定义 + 参数）
+    if result.get("dry_run"):
+        print("\n" + "=" * 60)
+        print("🧪 Dry-run：以下是发送给 GPT-5 的请求体（未联网）")
+        print("=" * 60)
+        print(f"Model: {result['model']}")
+        print(f"任务: {args.request}")
+        print("-" * 60)
+        print(json.dumps(result["request"], indent=2, ensure_ascii=False))
+        print("=" * 60)
+    elif result["success"]:
+        print("\n" + "=" * 60)
+        print("📝 Response:")
+        print("-" * 60)
+        print(result["response"])
+        print("-" * 60)
+        usage = result.get("usage") or {}
+        if usage:
+            print(
+                f"📊 Tokens - Input: {usage.get('input_tokens', 'N/A')}, "
+                f"Output: {usage.get('output_tokens', 'N/A')}, "
+                f"Reasoning: {usage.get('output_tokens_details', {}).get('reasoning_tokens', 0)}, "
+                f"Total: {usage.get('total_tokens', 'N/A')}"
+            )
+        print("=" * 60)
+    else:
+        print(f"❌ Error: {result.get('error')}")
+
+    # 按需将完整结果（含轨迹/请求体）保存为 JSON，便于复盘
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        print(f"💾 结果已保存到: {args.output}")
+
+    if not result["success"]:
+        sys.exit(1)
+
+
+def main():
+    """主入口：解析命令行参数并分派到交互 / 单次 / 测试模式。"""
+    parser = argparse.ArgumentParser(
+        description="GPT-5 原生工具 Agent —— 演示实验 1.3：网络搜索 + 代码解释器的原生 Deep Research 能力",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例：
+  python main.py                                    # 交互模式（默认）
+  python main.py --mode single --request "东盟 10 国首都之间距离最近的两个首都是？"
+  python main.py --mode single --request "分析比特币近一月走势" --reasoning high --verbosity high
+  python main.py --mode single --request "..." --output result.json
+  python main.py --dry-run --request "..."          # 离线查看请求体（原生工具定义），无需 API Key
+  python main.py --mode test --test basic           # 运行指定测试用例
+""",
+    )
+
     parser.add_argument(
         "--mode",
         choices=["interactive", "single", "test"],
         default="interactive",
-        help="Execution mode"
+        help="运行模式：interactive 交互对话（默认）/ single 单次请求 / test 运行测试",
     )
-    
     parser.add_argument(
         "--request",
         type=str,
-        help="Request for single mode"
+        help="single / dry-run 模式下的任务或查询内容",
     )
-    
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help=f"覆盖模型名称（默认取配置 {Config.MODEL_NAME}）",
+    )
+    parser.add_argument(
+        "--reasoning",
+        choices=["low", "medium", "high"],
+        default="low",
+        help="推理力度 Reasoning Effort（low/medium/high，默认 low）",
+    )
+    parser.add_argument(
+        "--verbosity",
+        choices=["low", "medium", "high"],
+        default=None,
+        help="输出详略程度 Verbosity（low/medium/high，默认跟随模型）",
+    )
     parser.add_argument(
         "--no-tools",
         action="store_true",
-        help="Disable tools"
+        help="禁用原生工具（web_search / code_interpreter）",
     )
-    
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="将完整结果（含轨迹 / 请求体）保存为 JSON 文件的路径",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="离线组装并打印请求体（含原生工具定义），不调用 API、无需 API Key",
+    )
     parser.add_argument(
         "--test",
         type=str,
-        help="Run specific test (for test mode)"
+        help="test 模式下运行指定测试用例（basic/analysis/complex/code/reasoning/search_analyze/chain）",
     )
-    
+
     args = parser.parse_args()
-    
-    # Validate configuration
+
+    # dry-run：离线路径，跳过 API Key 校验
+    if args.dry_run:
+        if not args.request:
+            print("❌ --dry-run 需要配合 --request 使用")
+            sys.exit(1)
+        _run_single(args)
+        return
+
+    # 其余模式需要有效配置
     if not Config.validate():
-        print("❌ Configuration error!")
-        print("Please create a .env file with your OPENROUTER_API_KEY")
-        print("\nExample .env file:")
+        print("❌ 配置错误！")
+        print("请创建 .env 文件并填入 OPENROUTER_API_KEY")
+        print("\n示例 .env：")
         print("OPENROUTER_API_KEY=sk-or-v1-your-key-here")
         sys.exit(1)
-    
+
     if args.mode == "interactive":
-        # Run interactive CLI
         cli = InteractiveCLI()
         cli.run()
-        
+
     elif args.mode == "single":
-        # Single request mode
         if not args.request:
-            print("❌ --request required for single mode")
+            print("❌ single 模式需要 --request 参数")
             sys.exit(1)
-        
-        agent = GPT5NativeAgent(
-            api_key=Config.OPENROUTER_API_KEY,
-            base_url=Config.OPENROUTER_BASE_URL,
-            model=Config.MODEL_NAME
-        )
-        
-        result = agent.process_request(
-            args.request,
-            use_tools=not args.no_tools,
-            temperature=Config.DEFAULT_TEMPERATURE,
-            reasoning_effort="low"  # Default for single mode
-        )
-        
-        if result["success"]:
-            print(result["response"])
-        else:
-            print(f"Error: {result.get('error')}")
-            sys.exit(1)
-            
+        _run_single(args)
+
     elif args.mode == "test":
-        # Run tests
         from test_agent import TestGPT5Agent, run_single_test
-        
+
         if args.test:
             run_single_test(args.test)
         else:

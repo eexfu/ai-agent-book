@@ -6,6 +6,30 @@ from typing import Optional, Dict, Any
 from enum import Enum
 
 
+def _openrouter_model_id(model: Optional[str]) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-5.6-luna"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-5.6-luna)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    if ml.startswith("kimi"):
+        # kimi-k3 is not on OpenRouter; moonshotai/kimi-k2.6 is the closest hosted id.
+        return "moonshotai/kimi-k2.6"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-5.6-luna"
+
+
 class Provider(str, Enum):
     """Supported LLM providers"""
     SILICONFLOW = "siliconflow"
@@ -21,6 +45,7 @@ class Provider(str, Enum):
 
 class KnowledgeBaseType(str, Enum):
     """Knowledge base backend types"""
+    OFFLINE = "offline"  # In-process BM25 over local law corpus (no server, no API)
     LOCAL = "local"  # Local retrieval pipeline
     DIFY = "dify"    # Dify knowledge base API
     RAPTOR = "raptor"  # RAPTOR tree-based index
@@ -48,19 +73,19 @@ class LLMConfig:
             "base_url": "https://ark.cn-beijing.volces.com/api/v3"
         },
         "kimi": {
-            "model": "kimi-k2-0905-preview",
+            "model": "kimi-k3",
             "base_url": "https://api.moonshot.cn/v1"
         },
         "moonshot": {
-            "model": "kimi-k2-0905-preview",
+            "model": "kimi-k3",
             "base_url": "https://api.moonshot.cn/v1"
         },
         "openrouter": {
-            "model": "openai/gpt-4o-2024-11-20",
+            "model": "openai/gpt-5.6-luna",
             "base_url": "https://openrouter.ai/api/v1"
         },
         "openai": {
-            "model": "gpt-4o-2024-11-20",
+            "model": "gpt-5.6-luna",
             "base_url": "https://api.openai.com/v1"
         },
         "groq": {
@@ -100,19 +125,33 @@ class LLMConfig:
         
         # Get API key
         api_key = self.api_key or self.get_api_key(provider_lower)
+
+        # Universal OpenRouter fallback: primary provider key absent but
+        # OPENROUTER_API_KEY present -> route through OpenRouter.
+        if not api_key and provider_lower != "openrouter" and os.getenv("OPENROUTER_API_KEY"):
+            model = _openrouter_model_id(self.model or defaults.get("model"))
+            return {
+                "api_key": os.getenv("OPENROUTER_API_KEY"),
+                "base_url": "https://openrouter.ai/api/v1",
+            }, model
+
         if not api_key:
-            raise ValueError(f"API key required for provider '{provider_lower}'")
-        
+            raise ValueError(
+                f"API key required for provider '{provider_lower}'. Set the "
+                f"provider's key (e.g. MOONSHOT_API_KEY / OPENAI_API_KEY) or "
+                f"OPENROUTER_API_KEY to use the OpenRouter fallback."
+            )
+
         # Build config
         config = {
             "api_key": api_key,
             "model": self.model or defaults.get("model")
         }
-        
+
         # Add base_url if not OpenAI
         if "base_url" in defaults:
             config["base_url"] = defaults["base_url"]
-        
+
         return config, config.pop("model")
 
 
@@ -120,7 +159,11 @@ class LLMConfig:
 class KnowledgeBaseConfig:
     """Knowledge base configuration"""
     type: KnowledgeBaseType = KnowledgeBaseType.LOCAL
-    
+
+    # Offline in-process BM25 backend config (no external server / no API key)
+    offline_corpus_path: str = "laws"
+    offline_top_k: int = 5
+
     # Local retrieval pipeline config
     local_base_url: str = "http://localhost:4242"
     local_top_k: int = 3

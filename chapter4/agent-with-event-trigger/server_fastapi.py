@@ -16,6 +16,27 @@ import time
 import asyncio
 import uvicorn
 
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var; fall back to default (with a warning) if malformed."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"Invalid {name} value: {raw!r} (must be an integer); using default {default}")
+        return default
+
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -130,7 +151,7 @@ async def init_agent():
         enable_system_state=True,
         save_trajectory=True,
         trajectory_file="event_agent_trajectory.json",
-        temperature=0.7,
+        temperature=_reasoning_safe_temperature(model, 0.7),
         max_tokens=4096,
         use_mcp_servers=enable_mcp
     )
@@ -380,7 +401,7 @@ def main():
     print()
     
     # Get port from environment
-    port = int(os.getenv('AGENT_PORT', '8000'))
+    port = _env_int('AGENT_PORT', 8000)
     
     print(f"✅ Starting server on port {port}")
     print(f"📡 API Documentation: http://localhost:{port}/docs")

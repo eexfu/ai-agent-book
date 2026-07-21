@@ -1,6 +1,21 @@
 # System-Hint Enhanced AI Agent
 
+> 对应书中 **实验 2-8：几种好用的 Agent 状态栏技术**（第二章“Agent 状态栏 / Agent Status Bar”一节）。本目录即书中所说的 `agent-status-bar` 实验框架——“system hint（系统提示）”与“Agent 状态栏（status bar）”是同一概念的两种叫法：在上下文末尾以一条 `role=user` 的消息注入动态状态摘要。
+
 An advanced AI agent that demonstrates the power of system hints for improving agent trajectory and preventing common issues like infinite loops, poor context awareness, and inefficient task management, with automatic trajectory saving for debugging.
+
+## ⚡ 先跑离线预览（无需 API Key）
+
+想在不配置任何 API Key 的情况下直观看到状态栏如何改变模型看到的上下文，运行：
+
+```bash
+python main.py --mode preview
+```
+
+该命令在本地渲染书中五种状态栏技术（时间戳、工具调用计数器、TODO 列表、详细错误信息、系统状态感知），
+对每一项做一次 **“无状态栏 vs 有状态栏”** 的前后对比，并打印最终追加到上下文末尾的完整状态栏消息。
+配合 `--no-timestamps` / `--no-counter` / `--no-todo` / `--no-errors` / `--no-state` 可分别关闭某一类，
+单独观察它对上下文的影响。整个过程不发起任何 LLM 调用。
 
 ## 🌟 Key Features
 
@@ -44,7 +59,7 @@ An advanced AI agent that demonstrates the power of system hints for improving a
 
 ```bash
 # Clone the repository (if not already done)
-cd projects/week2/system-hint
+cd chapter2/system-hint
 
 # Install dependencies
 pip install -r requirements.txt
@@ -55,9 +70,16 @@ cp env.example .env
 export KIMI_API_KEY='your-api-key-here'
 ```
 
+> **通用回退（OpenRouter）**：未设置 `KIMI_API_KEY` 时，只要配置了
+> `OPENROUTER_API_KEY`，实验会自动改走 OpenRouter（`kimi-*` 会映射为
+> `moonshotai/kimi-k2`）。设置了 `KIMI_API_KEY` 时行为完全不变。
+
 ### Basic Usage
 
 ```bash
+# Offline preview of the status bar (no API key required)
+python main.py --mode preview
+
 # Interactive mode (default)
 python main.py
 
@@ -67,13 +89,18 @@ python main.py --mode sample
 # Execute a single task from command line
 python main.py --mode single --task "Create a hello world Python script"
 
+# Override provider / model, and choose the trajectory output file
+python main.py --mode single --task "..." --provider kimi --model kimi-k3 --output run1.json
+
 # Run demonstrations
 python main.py --mode demo --demo basic
 python main.py --mode demo --demo loop
 python main.py --mode demo --demo comparison
 
-# Disable specific features
-python main.py --no-todo --no-timestamps --task "Simple task"
+# Disable specific features (works for both preview and live modes)
+python main.py --mode single --no-todo --no-timestamps --task "Simple task"
+# Or observe the effect offline (no API key):
+python main.py --mode preview --no-todo --no-timestamps
 
 # Quick start with sample task
 python quickstart.py
@@ -127,10 +154,13 @@ system-hint/
 ├── config.py         # Configuration management
 ├── quickstart.py     # Quick demo script
 ├── test_basic.py     # Basic tests
+├── test_hint_behavior.py # System-hint behavior tests
 ├── view_trajectory.py # Trajectory viewing utility
 ├── requirements.txt  # Python dependencies
 ├── env.example       # Environment variable template
 ├── trajectory.json   # Auto-saved trajectory (created at runtime)
+├── CHANGELOG.md      # Change log
+├── NOTES.md          # Design notes
 └── README.md        # This file
 ```
 
@@ -182,6 +212,13 @@ The system prompt includes explicit rules for TODO management, error handling, a
 | `trajectory_file` | `"trajectory.json"` | Trajectory output file |
 
 ## 🔍 Demonstrations
+
+### 0. Offline Status-Bar Preview (no API key)
+
+Renders the five status-bar techniques as before/after comparisons, entirely offline:
+```bash
+python main.py --mode preview
+```
 
 ### 1. Basic Features Demo
 

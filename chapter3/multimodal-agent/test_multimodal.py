@@ -70,12 +70,12 @@ class TestMultimodalAgent(unittest.IsolatedAsyncioTestCase):
     async def test_agent_initialization(self):
         """Test agent initialization"""
         agent = MultimodalAgent(
-            model="gemini-2.5-pro",
+            model="gemini-3.5-flash",
             mode=ExtractionMode.NATIVE,
             enable_tools=False
         )
         
-        self.assertEqual(agent.current_model, "gemini-2.5-pro")
+        self.assertEqual(agent.current_model, "gemini-3.5-flash")
         self.assertEqual(agent.extraction_mode, ExtractionMode.NATIVE)
         self.assertFalse(agent.enable_multimodal_tools)
         self.assertIsNone(agent.tools)
@@ -83,7 +83,7 @@ class TestMultimodalAgent(unittest.IsolatedAsyncioTestCase):
     async def test_agent_with_tools(self):
         """Test agent initialization with tools"""
         agent = MultimodalAgent(
-            model="gemini-2.5-pro",
+            model="gemini-3.5-flash",
             mode=ExtractionMode.EXTRACT_TO_TEXT,
             enable_tools=True
         )
@@ -161,7 +161,7 @@ class TestMultimodalAgent(unittest.IsolatedAsyncioTestCase):
     async def test_process_native_gemini(self, mock_model_class, mock_configure):
         """Test native Gemini processing"""
         agent = MultimodalAgent(
-            model="gemini-2.5-pro",
+            model="gemini-3.5-flash",
             mode=ExtractionMode.NATIVE
         )
         

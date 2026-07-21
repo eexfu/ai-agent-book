@@ -214,7 +214,8 @@ class LLMProviderFactory {
     switch (providerName) {
       case 'openai':
         return new OpenAILLMProvider(providerConfig, apiKey);
-      case 'openrouter-gpt4o':
+      case 'openrouter':
+      case 'openrouter-gpt':
       case 'openrouter-gemini':
         return new OpenRouterLLMProvider(providerConfig, apiKey);
       case 'ark':

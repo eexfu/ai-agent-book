@@ -6,6 +6,30 @@ from typing import Optional, Dict, Any
 from enum import Enum
 
 
+def _openrouter_model_id(model: Optional[str]) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-5.6-luna"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-5.6-luna)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    if ml.startswith("kimi"):
+        # kimi-k3 is not on OpenRouter; moonshotai/kimi-k2.6 is the closest hosted id.
+        return "moonshotai/kimi-k2.6"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-5.6-luna"
+
+
 class Provider(str, Enum):
     """Supported LLM providers"""
     SILICONFLOW = "siliconflow"
@@ -48,19 +72,19 @@ class LLMConfig:
             "base_url": "https://ark.cn-beijing.volces.com/api/v3"
         },
         "kimi": {
-            "model": "kimi-k2-0905-preview",
+            "model": "kimi-k3",
             "base_url": "https://api.moonshot.cn/v1"
         },
         "moonshot": {
-            "model": "kimi-k2-0905-preview",
+            "model": "kimi-k3",
             "base_url": "https://api.moonshot.cn/v1"
         },
         "openrouter": {
-            "model": "openai/gpt-4o-2024-11-20",
+            "model": "openai/gpt-5.6-luna",
             "base_url": "https://openrouter.ai/api/v1"
         },
         "openai": {
-            "model": "gpt-4o-2024-11-20",
+            "model": "gpt-5.6-luna",
             "base_url": "https://api.openai.com/v1"
         },
         "groq": {
@@ -100,19 +124,38 @@ class LLMConfig:
         
         # Get API key
         api_key = self.api_key or self.get_api_key(provider_lower)
+
+        # Universal OpenRouter fallback: primary provider key absent but
+        # OPENROUTER_API_KEY present -> route through OpenRouter. Additionally,
+        # gpt-5.x (incl. gpt-5.6*) needs OpenAI org-verification on the direct
+        # API, so prefer OpenRouter for those ids whenever an OR key is present.
+        model_name = self.model or defaults.get("model")
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        prefer_openrouter = bool(openrouter_key) and str(model_name or "").lower().startswith("gpt-5")
+        if (not api_key or prefer_openrouter) and provider_lower != "openrouter" and openrouter_key:
+            model = _openrouter_model_id(model_name)
+            return {
+                "api_key": openrouter_key,
+                "base_url": "https://openrouter.ai/api/v1",
+            }, model
+
         if not api_key:
-            raise ValueError(f"API key required for provider '{provider_lower}'")
-        
+            raise ValueError(
+                f"API key required for provider '{provider_lower}'. Set the "
+                f"provider's key (e.g. MOONSHOT_API_KEY / OPENAI_API_KEY) or "
+                f"OPENROUTER_API_KEY to use the OpenRouter fallback."
+            )
+
         # Build config
         config = {
             "api_key": api_key,
             "model": self.model or defaults.get("model")
         }
-        
+
         # Add base_url if not OpenAI
         if "base_url" in defaults:
             config["base_url"] = defaults["base_url"]
-        
+
         return config, config.pop("model")
 
 

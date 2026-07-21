@@ -50,7 +50,7 @@ def demo_basic_elo():
     for rank, (model, rating, matches, wins) in enumerate(leaderboard, 1):
         win_rate = (wins / matches * 100) if matches > 0 else 0
         print(f"{rank}. {model:15s} - Rating: {rating:7.1f} | "
-              f"Matches: {matches:2d} | Wins: {wins:2d} | Win Rate: {win_rate:5.1f}%")
+              f"Matches: {matches:2d} | Wins: {wins:4.1f} | Win Rate: {win_rate:5.1f}%")
     
     print()
     

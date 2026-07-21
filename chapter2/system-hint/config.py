@@ -36,7 +36,7 @@ class AgentConfig:
     def from_env(cls) -> "AgentConfig":
         """Create configuration from environment variables"""
         return cls(
-            api_key=os.getenv("KIMI_API_KEY"),
+            api_key=os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("OPENROUTER_API_KEY"),
             provider=os.getenv("LLM_PROVIDER", "kimi"),
             model=os.getenv("LLM_MODEL"),
             enable_timestamps=os.getenv("ENABLE_TIMESTAMPS", "true").lower() == "true",
@@ -54,7 +54,7 @@ class AgentConfig:
     def validate(self) -> bool:
         """Validate the configuration"""
         if not self.api_key:
-            raise ValueError("API key is required. Set KIMI_API_KEY environment variable.")
+            raise ValueError("API key is required. Set KIMI_API_KEY (or MOONSHOT_API_KEY / OPENROUTER_API_KEY fallback).")
         
         if self.provider not in ["kimi", "moonshot"]:
             raise ValueError(f"Unsupported provider: {self.provider}")
@@ -116,7 +116,7 @@ def get_config(preset: Optional[str] = None) -> AgentConfig:
     if preset and preset in PRESETS:
         config = PRESETS[preset]
         # Override with environment API key if available
-        config.api_key = os.getenv("KIMI_API_KEY")
+        config.api_key = os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or os.getenv("OPENROUTER_API_KEY")
         return config
     
     return AgentConfig.from_env()

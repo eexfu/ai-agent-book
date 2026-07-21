@@ -1,5 +1,5 @@
 # KV Cache Demonstration Requirements
-# Core dependencies for ReAct agent with Kimi K2 model
+# Core dependencies for ReAct agent with Kimi K3 model
 
 # OpenAI client for Kimi API compatibility
 openai>=1.35.0

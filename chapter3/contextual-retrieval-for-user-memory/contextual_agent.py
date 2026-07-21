@@ -18,6 +18,15 @@ from contextual_indexer import ContextualMemoryIndexer
 from advanced_memory_manager import AdvancedMemoryManager
 from tools import MemoryTools, get_tool_definitions
 
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -306,7 +315,7 @@ Remember: Good service answers the question. Great service anticipates what come
                     messages=messages,
                     tools=self.tools,
                     tool_choice="auto",
-                    temperature=0.3,
+                    temperature=_reasoning_safe_temperature(self.model, 0.3),
                     max_tokens=2048,
                     stream=stream
                 )

@@ -6,6 +6,7 @@ This replicates the key insights from "The Second Half" blog post.
 import os
 import json
 import time
+import random
 import argparse
 from datetime import datetime
 from typing import Dict, Any, List
@@ -13,6 +14,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from game_environment import TreasureHuntGame
 from rl_agent import QLearningAgent
@@ -36,44 +41,60 @@ class ExperimentRunner:
         
         self.results = {}
     
-    def run_rl_experiment(self, 
-                         num_training_episodes: int = 5000,
+    def run_rl_experiment(self,
+                         num_training_episodes: int = 10000,
                          num_eval_episodes: int = 100,
                          verbose: bool = True,
-                         stochastic: bool = False) -> Dict[str, Any]:
+                         stochastic: bool = False,
+                         learning_rate: float = 0.2,
+                         discount_factor: float = 0.99,
+                         epsilon_decay: float = 0.9995,
+                         epsilon_min: float = 0.1,
+                         checkpoint_interval: int = 1000) -> Dict[str, Any]:
         """
         Run experiment with traditional Q-learning agent.
-        
+
         Args:
             num_training_episodes: Number of episodes to train
             num_eval_episodes: Number of episodes to evaluate
             verbose: Whether to print details
             stochastic: Whether to use stochastic environment
+            learning_rate: Q-learning learning rate (alpha)
+            discount_factor: Discount factor (gamma)
+            epsilon_decay: Per-episode epsilon decay
+            epsilon_min: Minimum exploration rate
+            checkpoint_interval: Record/print a learning-curve row every N episodes
         """
         print("\n" + "="*60)
         print("TRADITIONAL RL EXPERIMENT (Q-Learning)")
         print("="*60)
-        
-        # Initialize agent with improved hyperparameters
+
+        # Initialize agent with the given hyperparameters
         agent = QLearningAgent(
-            learning_rate=0.2,
-            discount_factor=0.99,
+            learning_rate=learning_rate,
+            discount_factor=discount_factor,
             epsilon=1.0,
-            epsilon_decay=0.9995,
-            epsilon_min=0.1
+            epsilon_decay=epsilon_decay,
+            epsilon_min=epsilon_min
         )
-        
+
         # Training phase
         print(f"\nTraining for {num_training_episodes} episodes...")
         start_time = time.time()
-        
+
         train_results = agent.train(
             num_episodes=num_training_episodes,
             verbose=verbose,
-            stochastic=stochastic
+            stochastic=stochastic,
+            checkpoint_interval=checkpoint_interval
         )
-        
+
         training_time = time.time() - start_time
+
+        # Show the learning curve (success rate over episodes) -- this is the
+        # core point of experiment 7-1: the agent slowly LEARNS from experience.
+        self._print_learning_curve(train_results.get("learning_curve", []),
+                                    checkpoint_interval)
         
         # Evaluation phase
         print(f"\nEvaluating on {num_eval_episodes} episodes...")
@@ -96,9 +117,10 @@ class ExperimentRunner:
             "eval_avg_reward": eval_results["avg_reward"],
             "eval_avg_steps": eval_results["avg_length"],
             "episode_rewards": train_results["episode_rewards"],
-            "episode_lengths": train_results["episode_lengths"]
+            "episode_lengths": train_results["episode_lengths"],
+            "learning_curve": train_results.get("learning_curve", [])
         }
-        
+
         # Save agent
         agent.save(self.experiment_dir / "rl_agent.pkl")
         
@@ -110,11 +132,34 @@ class ExperimentRunner:
         
         return results
     
+    def _print_learning_curve(self, learning_curve: List[Dict[str, Any]],
+                              checkpoint_interval: int):
+        """Print the Q-learning success-rate-over-episodes table.
+
+        This is the whole point of experiment 7-1: watch the victory rate climb
+        from 0% (blind exploration) to ~100% only after thousands of episodes.
+        """
+        if not learning_curve:
+            return
+
+        window = checkpoint_interval if checkpoint_interval > 0 else 1000
+        print("\n" + "-"*60)
+        print(f"LEARNING CURVE (Q-Learning success rate over episodes)")
+        print(f"胜率按最近 {window} 局的滑动窗口统计")
+        print("-"*60)
+        print(f"{'Episodes':>10} | {'Victory rate':>12} | {'Q-table':>8} | {'epsilon':>8}")
+        print(f"{'-'*10}-+-{'-'*12}-+-{'-'*8}-+-{'-'*8}")
+        for row in learning_curve:
+            print(f"{row['episode']:>10} | {row['victory_rate']*100:>11.1f}% | "
+                  f"{row['q_table_size']:>8} | {row['epsilon']:>8.3f}")
+        print("-"*60)
+
     def run_llm_experiment(self,
                           num_training_episodes: int = 20,
                           num_eval_episodes: int = 10,
                           verbose: bool = True,
-                          stochastic: bool = False) -> Dict[str, Any]:
+                          stochastic: bool = False,
+                          model: str = "kimi-k3") -> Dict[str, Any]:
         """
         Run experiment with LLM-based in-context learning agent.
         
@@ -125,25 +170,26 @@ class ExperimentRunner:
             stochastic: Whether to use stochastic environment
         """
         print("\n" + "="*70)
-        print("LLM-BASED IN-CONTEXT LEARNING EXPERIMENT (KIMI K2)")
+        print(f"LLM-BASED IN-CONTEXT LEARNING EXPERIMENT ({model})")
         print("="*70)
-        
+
         # Check for API key
         api_key = os.getenv("MOONSHOT_API_KEY")
-        if not api_key:
+        if not api_key and not os.getenv("OPENROUTER_API_KEY"):
             print("\n⚠️ Warning: MOONSHOT_API_KEY not set. Skipping LLM experiment.")
             print("📝 Please set your Kimi API key: export MOONSHOT_API_KEY='your-key-here'")
             print("🔗 Get your key at: https://platform.moonshot.cn/")
+            print("💡 Or set OPENROUTER_API_KEY as a universal fallback.")
             return None
-        
+
         print("\n✅ API key found. Initializing LLM agent...")
-        print("🧠 Using Kimi K2 model for reasoning and in-context learning")
+        print(f"🧠 Using {model} model for reasoning and in-context learning")
         print("📖 The LLM will show its complete thought process for each decision")
-        
+
         # Initialize agent
         agent = LLMAgent(
             api_key=api_key,
-            model="kimi-k2-0905-preview",  # Updated to K2 model
+            model=model,
             temperature=0.7,
             max_experiences=50
         )
@@ -346,43 +392,56 @@ class ExperimentRunner:
         print(f"\nPlots saved to {self.experiment_dir / 'comparison_plots.png'}")
     
     def run_full_experiment(self,
-                           rl_episodes: int = 5000,
+                           rl_episodes: int = 10000,
                            llm_episodes: int = 20,
+                           eval_episodes: int = 100,
                            verbose: bool = False,
-                           stochastic: bool = False):
+                           stochastic: bool = False,
+                           model: str = "kimi-k3",
+                           checkpoint_interval: int = 1000,
+                           rl_hyperparams: Dict[str, float] = None):
         """
         Run full comparison experiment.
-        
+
         Args:
             rl_episodes: Number of episodes for RL training
             llm_episodes: Number of episodes for LLM training
+            eval_episodes: Number of episodes for RL evaluation
             verbose: Whether to print details
             stochastic: Whether to use stochastic environment
+            model: LLM model name (Moonshot/Kimi)
+            checkpoint_interval: Learning-curve sampling interval (RL)
+            rl_hyperparams: Optional dict overriding Q-learning hyperparameters
         """
         print("\n" + "="*70)
         print("EXPERIMENT: Traditional RL vs LLM In-Context Learning")
         print("Replicating insights from 'The Second Half' by Shunyu Yao")
         print("="*70)
-        
+
         # Show game rules for reference
         game = TreasureHuntGame(stochastic=stochastic)
         print("\n" + game.get_hidden_rules())
-        
+
+        rl_hyperparams = rl_hyperparams or {}
+
         # Run RL experiment
         rl_results = self.run_rl_experiment(
             num_training_episodes=rl_episodes,
-            num_eval_episodes=100,
+            num_eval_episodes=eval_episodes,
             verbose=verbose,
-            stochastic=stochastic
+            stochastic=stochastic,
+            checkpoint_interval=checkpoint_interval,
+            **rl_hyperparams
         )
         self.results["rl"] = rl_results
-        
+
         # Run LLM experiment
         llm_results = self.run_llm_experiment(
             num_training_episodes=llm_episodes,
             num_eval_episodes=10,
             verbose=verbose,
-            stochastic=stochastic
+            stochastic=stochastic,
+            model=model
         )
         self.results["llm"] = llm_results
         
@@ -423,42 +482,98 @@ class ExperimentRunner:
 def main():
     """Main entry point for the experiment."""
     parser = argparse.ArgumentParser(
-        description="Compare RL vs LLM learning approaches"
+        description="实验 7-1 / 7-2：在寻宝游戏中对比 Q-learning 与 LLM 的\"从经验中学习\"。"
+                    "Q-learning 完全离线运行（无需 API），LLM 模式需要 Moonshot/Kimi API Key。",
+        epilog="示例：\n"
+               "  python experiment.py --mode qlearning              # 只跑 Q-learning（离线，输出学习曲线）\n"
+               "  python experiment.py --mode qlearning --rl-episodes 10000 --seed 42\n"
+               "  python experiment.py --mode both --model kimi-k3  # RL vs LLM 对比\n"
+               "  python experiment.py --mode llm --llm-episodes 20   # 只跑 LLM 智能体",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--rl-episodes", type=int, default=5000,
-        help="Number of training episodes for RL agent"
+        "--mode", choices=["both", "qlearning", "rl", "llm"], default="both",
+        help="运行哪种智能体：qlearning/rl 只跑 Q-learning（离线），"
+             "llm 只跑 LLM 智能体（需 API），both 两者对比（默认）"
+    )
+    parser.add_argument(
+        "--rl-episodes", type=int, default=10000,
+        help="Q-learning 训练局数（默认 10000，对应实验 7-1）"
     )
     parser.add_argument(
         "--llm-episodes", type=int, default=20,
-        help="Number of training episodes for LLM agent"
+        help="LLM 智能体的训练局数（默认 20）"
     )
     parser.add_argument(
+        "--eval-episodes", type=int, default=100,
+        help="Q-learning 训练后贪婪评估的局数（默认 100）"
+    )
+    parser.add_argument(
+        "--checkpoint-interval", type=int, default=1000,
+        help="学习曲线采样间隔：每 N 局记录一次胜率/Q 表规模（默认 1000）"
+    )
+    parser.add_argument(
+        "--model", type=str, default=os.getenv("MOONSHOT_MODEL", "kimi-k3"),
+        help="LLM 模型名称（Moonshot/Kimi，默认 kimi-k3，可用 MOONSHOT_MODEL 环境变量覆盖）"
+    )
+    parser.add_argument(
+        "--output", type=str, default="results",
+        help="结果输出目录（默认 results/，每次运行会新建时间戳子目录）"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="随机种子，用于复现 Q-learning 的学习曲线（默认不固定）"
+    )
+    # Q-learning 超参数
+    parser.add_argument("--learning-rate", type=float, default=0.2,
+                        help="Q-learning 学习率 alpha（默认 0.2）")
+    parser.add_argument("--discount", type=float, default=0.99,
+                        help="折扣因子 gamma（默认 0.99）")
+    parser.add_argument("--epsilon-decay", type=float, default=0.9995,
+                        help="每局 epsilon 衰减系数（默认 0.9995）")
+    parser.add_argument("--epsilon-min", type=float, default=0.1,
+                        help="最小探索率 epsilon（默认 0.1）")
+    parser.add_argument(
         "--verbose", action="store_true",
-        help="Show detailed output during training"
+        help="训练过程中打印详细信息"
     )
     parser.add_argument(
         "--skip-llm", action="store_true",
-        help="Skip LLM experiment (useful if no API key)"
+        help="[兼容旧用法] 跳过 LLM 实验，等价于 --mode qlearning"
     )
     parser.add_argument(
         "--stochastic", action="store_true",
-        help="Use stochastic environment (adds randomness to rewards and actions)"
+        help="使用随机环境（奖励与动作带随机扰动）"
     )
     parser.add_argument(
         "--deterministic", action="store_true",
-        help="Use deterministic environment (default)"
+        help="使用确定性环境（默认）"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Handle environment mode
     if args.deterministic and args.stochastic:
         print("Error: Cannot specify both --deterministic and --stochastic")
         return
-    
+
+    # Episode counts must be positive; 0 would divide by zero in the
+    # train/evaluate victory-rate and average calculations.
+    if args.rl_episodes < 1 or args.llm_episodes < 1 or args.eval_episodes < 1:
+        print("Error: --rl-episodes, --llm-episodes and --eval-episodes must all be >= 1")
+        return
+
+    # Resolve run mode (--skip-llm kept as a backwards-compatible alias)
+    mode = "qlearning" if args.skip_llm else args.mode
+
+    # Seed for reproducible Q-learning learning curves
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        print(f"\n🎲 Random seed set to {args.seed} for reproducibility")
+
     stochastic = args.stochastic  # Default is False (deterministic)
-    
+
     if stochastic:
         print("\n🎲 Running experiment with STOCHASTIC environment")
         print("  - Random reward variations")
@@ -466,27 +581,57 @@ def main():
         print("  - Combat and crafting variations\n")
     else:
         print("\n🎯 Running experiment with DETERMINISTIC environment\n")
-    
+
+    rl_hyperparams = {
+        "learning_rate": args.learning_rate,
+        "discount_factor": args.discount,
+        "epsilon_decay": args.epsilon_decay,
+        "epsilon_min": args.epsilon_min,
+    }
+
     # Run experiment
-    runner = ExperimentRunner()
-    
-    if args.skip_llm:
-        # Run only RL experiment
+    runner = ExperimentRunner(results_dir=args.output)
+
+    if mode in ("qlearning", "rl"):
+        # Run only the Q-learning experiment (fully offline, no API needed)
         rl_results = runner.run_rl_experiment(
             num_training_episodes=args.rl_episodes,
+            num_eval_episodes=args.eval_episodes,
             verbose=args.verbose,
-            stochastic=stochastic
+            stochastic=stochastic,
+            checkpoint_interval=args.checkpoint_interval,
+            **rl_hyperparams
         )
-        print("\nSkipped LLM experiment. Run with API key to compare both methods.")
+        runner.results["rl"] = rl_results
+        with open(runner.experiment_dir / "experiment_results.json", 'w') as f:
+            json.dump(runner.results, f, indent=2)
+        print(f"\nResults saved to: {runner.experiment_dir}")
+        print("\nSkipped LLM experiment. Use --mode both with an API key to compare.")
+    elif mode == "llm":
+        # Run only the LLM experiment
+        llm_results = runner.run_llm_experiment(
+            num_training_episodes=args.llm_episodes,
+            verbose=args.verbose,
+            stochastic=stochastic,
+            model=args.model
+        )
+        runner.results["llm"] = llm_results
+        with open(runner.experiment_dir / "experiment_results.json", 'w') as f:
+            json.dump(runner.results, f, indent=2)
+        print(f"\nResults saved to: {runner.experiment_dir}")
     else:
         # Run full comparison
         results = runner.run_full_experiment(
             rl_episodes=args.rl_episodes,
             llm_episodes=args.llm_episodes,
+            eval_episodes=args.eval_episodes,
             verbose=args.verbose,
-            stochastic=stochastic
+            stochastic=stochastic,
+            model=args.model,
+            checkpoint_interval=args.checkpoint_interval,
+            rl_hyperparams=rl_hyperparams
         )
-    
+
     print("\nExperiment complete!")
 
 

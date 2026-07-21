@@ -7,6 +7,15 @@ import os
 from agent import EventTriggeredAgent, SystemHintConfig
 from event_types import Event, EventType
 
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 def main():
     """Run a simple demo of the event-triggered agent"""
     
@@ -47,7 +56,7 @@ def main():
         enable_system_state=True,
         save_trajectory=True,
         trajectory_file="demo_trajectory.json",
-        temperature=0.7,  # Matching conversational_agent.py
+        temperature=_reasoning_safe_temperature(model, 0.7),  # Matching conversational_agent.py
         max_tokens=4096   # Matching conversational_agent.py
     )
     

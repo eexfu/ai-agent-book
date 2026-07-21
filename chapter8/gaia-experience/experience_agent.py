@@ -107,22 +107,72 @@ class ExperienceAgent(Agent):
                 self.system_prompt = f"{self.base_system_prompt}\n\n# Relevant Past Experiences:\n{experience_text}"
                 logger.info(f"Applied {len(relevant_experiences)} relevant experiences to prompt")
         
-        # Clear trajectory for new task
+        # Reset the manual-capture buffer for the new task. The real trajectory
+        # is captured by AWorld and read back from the TaskResponse below.
         self.current_trajectory = []
-        
+
         # Execute the task
         result = await Runners.run_task(task)
         task_response = result.get(task.id)
-        
+
+        # Recover the actual execution trajectory produced by AWorld's replay
+        # buffer (TaskResponse.trajectory). Falls back to manually captured
+        # actions when the framework did not record a trajectory.
+        trajectory = self._extract_trajectory(task_response)
+
         # Process result for learning if enabled
         if self.learning_mode and task_response and self._is_successful(task_response, task):
-            await self._learn_from_success(question, task_response, self.current_trajectory)
+            await self._learn_from_success(question, task_response, trajectory)
         
         # Restore original prompt
         self.system_prompt = original_prompt
         
         return task_response
     
+    def _extract_trajectory(self, task_response: Optional[TaskResponse]) -> List[Dict[str, Any]]:
+        """
+        Normalize the trajectory recorded by AWorld into the step format the
+        TrajectorySummarizer expects: ``{'action': {'tool_name', 'action_name',
+        'params'}}``.
+
+        AWorld stores each step as a serialized replay-buffer ``DataRow`` whose
+        ``exp_data.actions`` field holds the ``ActionModel`` objects taken at
+        that step. When no framework trajectory is available (e.g. the runner
+        did not populate it), we fall back to any actions that were captured
+        manually via :meth:`capture_action`.
+
+        Args:
+            task_response: The response returned by ``Runners.run_task``.
+
+        Returns:
+            A list of normalized trajectory steps.
+        """
+        raw = getattr(task_response, "trajectory", None) if task_response else None
+        if not raw:
+            return list(self.current_trajectory)
+
+        steps: List[Dict[str, Any]] = []
+        for row in raw:
+            actions = []
+            if isinstance(row, dict):
+                exp_data = row.get("exp_data") or {}
+                if isinstance(exp_data, dict):
+                    actions = exp_data.get("actions") or []
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                steps.append({
+                    "action": {
+                        "tool_name": action.get("tool_name") or "unknown",
+                        "action_name": action.get("action_name") or "",
+                        "params": action.get("params") or {},
+                    }
+                })
+
+        # If normalization yielded nothing usable, keep the raw rows so the
+        # summarizer at least reflects the correct step count.
+        return steps or list(self.current_trajectory) or list(raw)
+
     def _get_relevant_experiences(self, question: str) -> List[Dict[str, Any]]:
         """
         Retrieve relevant experiences for a given question.
@@ -164,6 +214,8 @@ class ExperienceAgent(Agent):
             True if questions are similar
         """
         # Simple keyword overlap for now
+        if q1 is None or q2 is None:
+            return False
         q1_words = set(q1.lower().split())
         q2_words = set(q2.lower().split())
         
@@ -220,10 +272,18 @@ class ExperienceAgent(Agent):
         # Check if answer exists and is not empty
         if not response or not response.answer:
             return False
-        
+
+        # Honor AWorld's own success signal when the framework provides one.
+        success_flag = getattr(response, "success", None)
+        status = getattr(response, "status", None)
+        if success_flag is False:
+            return False
+        if status and str(status).lower() in {"failed", "cancelled"}:
+            return False
+
         # Additional success criteria can be added here
         # For GAIA, we might check against known answers if available
-        
+
         return True
     
     async def _learn_from_success(self, question: str, response: TaskResponse, trajectory: List[Dict[str, Any]]):
@@ -251,6 +311,9 @@ class ExperienceAgent(Agent):
                 'summary': summary.get('summary', ''),
                 'approach': summary.get('approach', ''),
                 'tools_used': summary.get('tools_used', []),
+                'key_insights': summary.get('key_insights', []),
+                'general_strategy': summary.get('general_strategy', ''),
+                'num_steps': len(trajectory),
                 'timestamp': datetime.now().isoformat(),
                 'success': True
             }

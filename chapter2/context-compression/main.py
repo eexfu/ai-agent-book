@@ -16,6 +16,17 @@ from compression_strategies import CompressionStrategy
 init(autoreset=True)
 
 
+# Short CLI aliases -> compression strategy (order matches the book's 实验 2-9)
+STRATEGY_CHOICES = {
+    "no_compression": CompressionStrategy.NO_COMPRESSION,
+    "individual": CompressionStrategy.NON_CONTEXT_AWARE_INDIVIDUAL,
+    "combined": CompressionStrategy.NON_CONTEXT_AWARE_COMBINED,
+    "context_aware": CompressionStrategy.CONTEXT_AWARE,
+    "citations": CompressionStrategy.CONTEXT_AWARE_CITATIONS,
+    "windowed": CompressionStrategy.WINDOWED_CONTEXT,
+}
+
+
 def print_banner():
     """Print demo banner"""
     print(f"\n{Fore.CYAN}{'='*70}")
@@ -51,14 +62,15 @@ def select_strategy() -> CompressionStrategy:
             print(f"{Fore.RED}Invalid choice. Please enter 1-6.{Style.RESET_ALL}")
 
 
-def run_demo(enable_streaming=True):
+def run_demo(enable_streaming=True, strategy: CompressionStrategy = None):
     """Run the interactive demo
-    
+
     Args:
         enable_streaming: Whether to enable streaming output (default: True)
+        strategy: Preselected compression strategy; if None, prompt the user interactively
     """
     print_banner()
-    
+
     # Check configuration
     if not Config.validate():
         print(f"\n{Fore.RED}Configuration validation failed!{Style.RESET_ALL}")
@@ -66,9 +78,10 @@ def run_demo(enable_streaming=True):
         print("  MOONSHOT_API_KEY=your_api_key_here")
         print("  SERPER_API_KEY=your_api_key_here (optional, will use mock data)")
         sys.exit(1)
-    
-    # Select strategy
-    strategy = select_strategy()
+
+    # Select strategy (interactively unless one was passed on the command line)
+    if strategy is None:
+        strategy = select_strategy()
     
     print(f"\n{Fore.CYAN}Selected: {strategy.value}{Style.RESET_ALL}")
     
@@ -163,20 +176,42 @@ def run_demo(enable_streaming=True):
 def main():
     """Main entry point"""
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Context Compression Research Agent Demo')
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="上下文压缩策略交互式演示：针对“追踪 OpenAI 联合创始人现状”这一研究任务，"
+                    "单独运行某一种压缩策略并实时观察其执行与压缩过程。",
+        epilog="示例：\n"
+               "  python main.py                         # 交互式选择策略\n"
+               "  python main.py -s citations            # 直接运行“带引用的上下文感知”策略\n"
+               "  python main.py -s windowed --no-streaming\n"
+               "如需批量对比全部策略并生成对比表，请使用 experiment.py。",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        '-s', '--strategy', choices=list(STRATEGY_CHOICES.keys()), metavar="NAME",
+        help="直接指定压缩策略（跳过交互式选择）。可选值：" + ", ".join(STRATEGY_CHOICES.keys()),
+    )
+    parser.add_argument(
+        '-m', '--model', default=None,
+        help=f"覆盖使用的模型名称（默认读取环境变量 MODEL_NAME，当前为 {Config.MODEL_NAME}）",
+    )
     parser.add_argument(
         '--no-streaming',
         action='store_true',
-        help='Disable streaming output (default: streaming enabled)'
+        help='关闭流式输出（默认开启流式）'
     )
     args = parser.parse_args()
-    
+
+    if args.model:
+        Config.MODEL_NAME = args.model
+
     # Determine streaming preference
     enable_streaming = not args.no_streaming
-    
+    preset_strategy = STRATEGY_CHOICES[args.strategy] if args.strategy else None
+
     try:
-        run_demo(enable_streaming=enable_streaming)
-        
+        run_demo(enable_streaming=enable_streaming, strategy=preset_strategy)
+
         # Ask if user wants to try another strategy
         while True:
             again = input(f"\n{Fore.GREEN}Try another strategy? (y/n): {Style.RESET_ALL}")
@@ -185,7 +220,7 @@ def main():
             else:
                 print(f"\n{Fore.CYAN}Thank you for using the demo!{Style.RESET_ALL}")
                 break
-                
+
     except KeyboardInterrupt:
         print(f"\n\n{Fore.YELLOW}Goodbye!{Style.RESET_ALL}")
         sys.exit(0)

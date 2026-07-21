@@ -3,11 +3,27 @@ __pycache__
 node_modules
 results/
 .*
+!.github
+!.github/**
+!.gitignore
+!.env.example
 *.log
+*.epub
 out/
 output/
 user-memory/data/
 document_store.json
 trajectory.json
 arena_data.json
+last_run.json
 *.wav
+*.mp3
+*.mp4
+
+# MkDocs build output
+site/
+_web/
+
+# Local-only prototype (the standalone demo of <agent-trajectory>).
+# Production usage embeds the component directly in book/chapterN.md.
+extras/agent-lab/demo.html

@@ -16,6 +16,14 @@ from tools import MemoryTools, get_tool_definitions
 from indexer import MemoryIndexer
 
 
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -228,7 +236,7 @@ Remember: Your credibility depends on providing accurate, well-sourced informati
                     messages=messages,
                     tools=self.tools,
                     tool_choice="auto",
-                    temperature=self.config.llm.temperature,
+                    temperature=_reasoning_safe_temperature(self.model, self.config.llm.temperature),
                     max_tokens=self.config.llm.max_tokens,
                     stream=False
                 )

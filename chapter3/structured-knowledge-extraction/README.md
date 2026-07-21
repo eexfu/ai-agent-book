@@ -1,155 +1,123 @@
-# Conversational Legal Advisor Agent for Case Analysis
+# 实验 3-13：从结构化数据中提取隐性知识——以司法判例分析为例
 
-## 1. Problem Statement
+配套《深入理解 AI Agent》第 3 章。演示如何让 Agent 不把知识库当成"只能检索的静态仓库"，
+而是**先把数据读懂、从数据本身归纳出结构化的决策逻辑，再基于这套逻辑回答问题**。
 
-The legal system is complex and opaque to most non-professionals. When individuals face legal issues, they often struggle to understand their situation, identify relevant facts, or anticipate potential outcomes. They lack the specialized knowledge to articulate their circumstances in a way that is meaningful for legal analysis. This project aims to develop a conversational AI agent that acts as a preliminary legal advisor. The agent will guide users through a structured conversation to gather the critical details of their situation, and then leverage a large database of past legal cases to provide insights, identify similar precedents, and explain the factors that may influence legal outcomes, such as the term of imprisonment.
+以三类罪名（盗窃罪 / 故意伤害罪 / 诈骗罪）的判例为例，完整走通四段流水线：
 
-## 2. Core Challenges
+```
+判例文本 ──①自下而上因子发现──▶ 模块化 schema（核心+各罪名扩展）
+                                        │
+                            ②结构化抽取（用发现的 schema 抽因子）
+                                        │
+                            ③各罪名内聚类 ──▶ 案件原型 + 层次因子重要性
+                                        │
+        新案情 ──④对话 Agent（匹配最近原型、按重要性追问、给出建议）◀──┘
+```
 
-The primary challenge is transforming a massive, unstructured dataset of legal case descriptions into a structured, queryable knowledge base and using it to power an intelligent conversational agent. This breaks down into several key difficulties:
+与"预定义僵化 schema + 回归黑箱"的做法相反，本实验的两个关键创新是：
+**因子不预设、由 LLM 从数据里自由归纳**；**判决经验不靠回归拟合刑期、而靠聚类出可解释的案件原型**。
 
-*   **Knowledge Structuring:** The "fact" descriptions in the CAIL dataset are narrative and unstructured. The core task is to extract the legally salient information and represent it in a consistent, structured format (i.e., defining and extracting "tags"). This requires identifying what elements of a case (e.g., severity of injury, presence of a weapon, mitigating circumstances) are determinative for the final judgment.
+## 四段流水线
 
-*   **Identifying Sentencing Factors:** It is not immediately obvious which factors from the case description have the most significant impact on the final sentence. A systematic approach is needed to analyze the structured data and quantify the relationships between case attributes and the length of imprisonment, to answer the question: "What really matters in my case?".
+**① 自下而上因子发现（`discovery.py`）**
+不预先定义任何字段。把判例文本分批喂给 LLM，让它**自由列出**每一批案例中所有可能影响判决的
+因素；再用一次 LLM 调用把各批发现的原始因子**归并、去重、规范化**成一个模块化 schema：
+`core`（适用所有罪名的通用因子：自首、赔偿、认罪认罚、前科累犯……）+ `extensions`
+（各罪名特有扩展因子：盗窃→涉案金额/入户/团伙，故意伤害→伤害等级/持械/预谋，诈骗→金额/受害人数）。
+产出 `data/schema.json`（带缓存）。
 
-*   **Guided Information Elicitation:** The agent must be more than a simple Q&A bot. It needs to "know what it doesn't know." Given a user's initial, often vague, description, the agent must intelligently ask targeted follow-up questions to elicit the specific details required for a meaningful case comparison and analysis. This requires an internal model of what information is necessary for different types of legal situations.
+**② 结构化抽取（`extractor.py`）**
+用发现出来的 schema，从每条判例抽取「核心 + 该罪名扩展」因子（LLM 结构化输出，
+`response_format=json_object`）。文本未提及的因子返回 `null`。抽取结果缓存到
+`data/extracted.jsonl`，一次性抽取后重跑几乎免费。
 
-*   **Case Retrieval and Relevance:** Once sufficient information is gathered, the system must efficiently search through thousands of cases to find the ones that are most analogous to the user's situation. Simple keyword search is insufficient; the matching must be based on the structured, legally relevant factors.
+**③ 聚类成案件原型 + 层次因子重要性（`archetypes.py`）**
+把因子翻译成数值向量：罪名 / 分类因子（如伤害等级）用 one-hot 开关位（不用 1/2/3，
+避免暗示大小关系）；金额 / 人数取 `ln` 压缩量纲；是非情节取 0/1。**在每个罪名内部**用
+KMeans 聚类（k 由轮廓系数自动挑选），得到若干「案件原型」——例如故意伤害罪会自动聚出
+"轻微伤"、"轻伤"、"持械预谋致重伤" 等典型模式。再算两级重要性：
+- **全局因子重要性**：每个因子在所有原型之间的区分度（簇间方差占比）→ 全局排序；
+- **原型内定义性因子**：每个原型相对全局最突出的因子 + 该原型典型刑期分布（中位 / 区间）。
 
-## 3. Proposed Solution
+产出可读、自洽的 `data/archetypes.json`（含标准化参数与簇心）。
 
-We propose a three-stage solution that encompasses knowledge base construction, analytical modeling, and the development of a conversational agent.
+**④ 对话式量刑建议 Agent（`advisor_agent.py`）**
+把「案件原型 + 层次因子重要性」当决策逻辑：从用户口语描述抽取已知因子 → 对照**全局因子
+重要性**追问仍缺失的关键因子 → 把案件**匹配到最近的案件原型**（先按罪名圈定候选，再只在
+已知维度上比距离）→ 让 LLM 基于该原型的统计数据（典型刑期区间、定义性因子）给出一段
+有判例支持、可解释的建议（附法律免责声明）。所有刑期数字均来自原型统计，LLM 只负责讲清楚。
 
-### 3.1 System Architecture Overview
+## 运行
 
-The system will be composed of two main parts: an offline processing pipeline and an online conversational agent.
+```bash
+pip install -r requirements.txt
+cp env.example .env        # 填入 OPENAI_API_KEY（默认模型 gpt-5.6-luna）
+python generate_data.py    # 可选：重新生成合成判例数据集（已自带 data/cases.jsonl）
+python demo.py             # 跑通 因子发现 → 抽取 → 聚类 → 对话建议 全流程
+```
 
-*   **Offline Pipeline:** This pipeline will process the entire CAIL dataset. It will extract structured information from each case's "fact" description and build a hybrid knowledge base. It will also train a predictive model to analyze sentencing factors.
-*   **Online Agent:** This is the user-facing conversational interface. It will manage the dialogue, query the knowledge base, and use the predictive model to provide insights to the user.
+首次运行会调用 LLM 做因子发现（约 7 次）与逐条抽取（约 66 次），结果分别写入
+`data/schema.json`、`data/extracted.jsonl`；再次运行直接命中缓存，几乎免费。
 
-### 3.2 Stage 1: Knowledge Extraction and Structuring
+## 真实运行输出（节选）
 
-This stage focuses on converting raw case text into a structured knowledge base. The central challenge is creating a schema that is comprehensive enough to capture the nuances of many different crime types while remaining consistent and manageable. We will employ a hybrid, data-driven strategy to achieve this.
+```
+阶段 1 自下而上发现的 schema：
+  核心通用因子: prior_record 前科 / self_surrender 自首 / compensation 赔偿 /
+               guilty_plea 认罪认罚 / victim_reconciliation 谅解 ...
+  扩展·盗窃罪:  amount_stolen 盗窃金额 / gang_involvement 团伙 / use_of_weapon 持械
+  扩展·故意伤害罪: injury_level 伤害等级[轻微伤/轻伤二级/重伤二级] / premeditation 预谋 ...
+  扩展·诈骗罪:  amount_defrauded 诈骗金额 / victim_count 受害人数 / group_crime 团伙
 
-1.  **Schema Strategy: A Hybrid, Data-Driven Approach**
+阶段 3 各罪名内聚类（k 由轮廓系数自动选）→ 共 12 个案件原型；全局因子重要性排序：
+  1. 罪名  2. 伤害等级=重伤  3. 诈骗金额  4. 盗窃金额  5. 团伙作案  6. 是否预谋 ...
+  ▸ 原型#0 [故意伤害罪] 中位 2 月：伤害等级=轻微伤(z=+2.5)
+  ▸ 原型#1 [故意伤害罪] 中位 42 月：伤害等级=重伤二级(z=+3.9)、预谋(z=+1.8) —— "持械预谋重伤"型
+  ▸ 原型#5 [盗窃罪]     中位 51 月：盗窃金额高、前科/累犯 100% ...
 
-    We will create a modular, component-based schema rather than a single monolithic one. This involves a multi-step process:
+阶段 4 对话：识别到盗窃案缺金额 → 按重要性追问金额/认罪/谅解 → 补全后匹配到 原型#6
+         （典型刑期中位 40 月、区间 24~50 月），并引用该原型的关键因子给出建议。
+```
 
-    *   **a. Top-Down Thematic Grouping:** We will first programmatically analyze the entire dataset to identify all unique `accusation` values. These will be grouped into broader legal categories (e.g., "Crimes Against Persons," "Crimes Against Property," "White-Collar Crimes," "Public Order Offenses"). This provides a structured framework for our schema.
+## 数据说明
 
-    *   **b. Core Schema + Extension Schemas:** We will define a two-level schema:
-        *   **`core_schema`**: Contains factors common across most criminal cases. This includes fields for `mitigating_factors` (like confession, compensation, surrender) and `aggravating_factors` (like recidivism, use of a weapon, leading role in a group crime).
-        *   **`extension_schemas`**: For each thematic group, we will define a specific extension. For instance, the "Crimes Against Persons" extension will include `victim_injury_level` and `number_of_victims`. The schema for "Financial Crimes" like "Bribery" (受贿) would include `amount_of_bribe` and `details_of_power_abuse`.
+`data/cases.jsonl` 是**自带的小样本合成数据**（66 条，覆盖 3 类罪名），由 `generate_data.py`
+用已知量刑公式加噪声生成：每条含自然语言 `fact`、结构化真值 `gold`、刑期 `label_months`。
+关键点是**因子在生成时被"写进"案情文本，发现阶段再从文本里把它们"读"回来**——因子发现完全
+不依赖生成时的字段列表，因此学到的模式来自数据本身。
 
-2.  **Two-Pass LLM-Powered Extraction and Discovery**
+**真实目标数据集是 CAIL2018**（中文刑事判决，数百万条）。因体量太大不便随仓库分发才用合成
+小样本；换成真实数据只需把 `generate_data.py` 换成读取 CAIL 的 `data_*.json`
+（每行含 `fact`、`meta.accusation`、`meta.term_of_imprisonment`），产出同结构的
+`cases.jsonl` 即可，发现 / 抽取 / 聚类 / 对话四段代码无需改动。
 
-    We will use a two-pass process to leverage the LLM for both factor discovery and structured data extraction.
+## 文件
 
-    *   **a. Pass 1: Automated Factor Discovery (Bottom-Up):** To ensure our schema is based on evidence from the data, we will first sample a few hundred cases from each thematic group. We will prompt an LLM with a broad instruction: "Analyze this legal case and list all key factors and circumstances that likely influenced the final judgment." The output from this discovery pass will be used to refine and validate the fields in our `core_schema` and `extension_schemas`, ensuring we capture the most salient information.
+| 文件 | 作用 |
+|------|------|
+| `generate_data.py` | 合成多罪名小样本判例数据集 |
+| `discovery.py` | 阶段 ①：自下而上因子发现 → 模块化 schema |
+| `extractor.py` | 阶段 ②：用发现的 schema 做结构化抽取（带缓存） |
+| `archetypes.py` | 阶段 ③：各罪名内聚类成案件原型 + 层次因子重要性 |
+| `advisor_agent.py` | 阶段 ④：对话式量刑建议 Agent（匹配最近原型） |
+| `demo.py` | 全流程演示入口 |
+| `config.py` | OpenAI 客户端与模型配置 |
 
-    *   **b. Pass 2: Full Structured Extraction (Top-Down):** With the refined, modular schema in place, we will process the entire dataset. For each case, the LLM will be given a targeted prompt instructing it to populate the fields of both the `core_schema` and the specific `extension_schema` that corresponds to the case's crime type.
+## 局限与免责声明
 
-3.  **Knowledge Base Creation:** The extracted JSON objects, now consistently structured according to crime type, will be stored in a hybrid database. We recommend using a system like Elasticsearch or a PostgreSQL database with JSONB support. This allows for both:
-    *   **Structured Filtering:** Exact queries on specific fields (e.g., `victim_injury_level: "重伤二级"` AND `use_of_weapon: true`).
-    *   **Full-Text Search:** Searching the original `fact` text.
-    Additionally, we can generate vector embeddings of the `fact` text to enable semantic similarity searches.
+- 本项目**仅用于教学**，演示"从结构化数据中提取隐性知识"这一技术范式。
+- 数据为合成、因子集经简化，聚类也无法刻画真实司法量刑的复杂性与非线性。
+- **本项目的任何输出都不构成法律意见。** 真实案件量刑受法律条文、司法解释、
+  地域政策与大量具体情节影响，请务必咨询专业律师，切勿据此做任何法律决策。
 
-### 3.3 Stage 2: Case Grouping and Factor Analysis
 
-Instead of training a traditional regression model to predict sentences, we will use an analytical, unsupervised approach to discover the natural structure within the case data. The goal is to group similar cases into "archetypes" and identify the factors that define these groups. This method is more robust and provides deeper insights than a simple predictive model.
+## OpenRouter 通用回退 / Universal OpenRouter fallback
 
-1.  **Case Vectorization:** For each crime category, the extracted structured data will be converted into a composite numerical vector. This is not a text embedding, but a structured representation built by processing each factor type appropriately and concatenating the results:
-    *   **Categorical Features** (e.g., `victim_injury_level`, `weapon_type`): These will be converted using **One-Hot Encoding**, creating a binary column for each possible category.
-    *   **Boolean and Tag-List Features** (e.g., `use_of_weapon`, `mitigating_factors`): These will be represented using **Multi-Hot Encoding**, creating a binary vector where each position corresponds to a specific factor and is marked '1' if present.
-    *   **Numerical Features** (e.g., `punish_of_money`): To handle skewed distributions, these will first undergo a **log transformation** and then be normalized using **Standard Scaling**.
-    This composite vector provides a comprehensive numerical fingerprint of each case for the clustering algorithm.
+This experiment now supports a **universal OpenRouter fallback** for its chat LLM.
 
-2.  **Clustering for Archetype Discovery:** We will use a density-based clustering algorithm like HDBSCAN on these vectors. This will group the cases into distinct clusters, where each cluster represents a common archetype of that crime (e.g., for assault, one cluster might be "minor disputes with no weapons," while another is "group assaults with serious injuries"). This approach has the advantage of not requiring us to pre-specify the number of archetypes.
-3.  **Defining Cluster Characteristics:** Once the clusters are identified, we will analyze the feature distribution within each cluster and compare it to the overall dataset. The factors that are most over-represented or under-represented in a cluster are the ones that define it. For instance, if 90% of cases in a cluster involve `compensation_paid`, that becomes a key characteristic of that archetype.
-4.  **Deriving the Factor Importance Hierarchy:** The "Factor Importance Hierarchy" will be derived directly from this clustering analysis. The factors that are most effective at separating cases into distinct, meaningful clusters (especially those with different sentencing outcomes) are deemed the most important. This can be quantified using statistical measures like mutual information or feature variance between clusters. This data-driven hierarchy of factors is the primary output of this stage and will be the core of the agent's intelligence.
+- If the primary provider key (e.g. `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `OPENAI_API_KEY` / `DOUBAO_API_KEY` …) is present, behavior is unchanged.
+- Else if `OPENROUTER_API_KEY` is set, the chat LLM is automatically routed through OpenRouter (`https://openrouter.ai/api/v1`). Model names are mapped automatically: `gpt-*`/`o1-*` → `openai/…`, `claude-*` → `anthropic/claude-opus-4.8`, `kimi-*` → `moonshotai/kimi-k2.6`, ids already containing `/` are kept as-is, and other provider-native ids (e.g. `doubao-*`) fall back to `openai/gpt-5.6-luna`. Set `OPENROUTER_MODEL` to force a specific OpenRouter model id.
+- Else a clear error lists the accepted keys.
 
-### 3.4 Stage 3: Conversational Agent and Case Retrieval
-
-This stage defines the user interaction logic, which is explicitly driven by the Factor Importance Hierarchy derived from the case grouping analysis in Stage 2.
-
-### 3.5 Agent Implementation and Logic
-
-To implement the agent's conversational and reasoning capabilities, we will adopt the **ReAct (Reasoning and Acting)** framework, similar to the architecture used in the `agentic-rag` project. This paradigm allows the agent to intelligently cycle through thoughts, actions, and observations to achieve its goals in a flexible and dynamic way.
-
-**1. ReAct Agent Architecture**
-
-Instead of a rigid pipeline, the agent will be a single, powerful LLM prompted to operate in a ReAct loop. It will have access to a specific set of tools to interact with its environment.
-
-*   **The ReAct Prompt:** The agent's core logic will be guided by a master prompt that instructs it to reason about its current state and choose the next best action. The loop is as follows:
-    1.  **Thought:** The agent analyzes the user's query and its internal state (what it knows). It decides what information is missing and what its goal is for the current turn.
-    2.  **Action:** Based on its thought, the agent chooses a tool to execute and specifies the parameters for it.
-    3.  **Observation:** The agent receives the output from the tool, which becomes the input for the next thought cycle.
-
-*   **Core Components:**
-    *   **LLM:** A powerful large language model serves as the central reasoning engine for the agent.
-    *   **State Tracker:** A simple dictionary that stores the conversation history and all extracted factors (`slots`) gathered so far. This is the agent's memory.
-    *   **Tool Library:** A set of functions the agent can call to perform actions.
-
-**2. Specialized Tools for the Legal Agent**
-
-The agent's capabilities will be defined by its specialized tools:
-
-*   **`GenerateGuidedQuestionnaire(crime_type: str, known_factors: dict)`:**
-    *   **Purpose:** This is the primary tool for gathering information from the user.
-    *   **Logic:** It takes the classified crime type and the currently known factors. It looks up the pre-computed **Factor Importance Hierarchy** for that crime. It then identifies the most important factors that are still unknown and constructs the full questionnaire, complete with explanations for each question.
-    *   **Output:** Returns a single, formatted string to be presented to the user.
-
-*   **`QueryKnowledgeBase(crime_type: str, known_factors: dict)`:**
-    *   **Purpose:** To find analogous cases in the structured database.
-    *   **Logic:** It takes the collected factors and constructs the weighted query for the knowledge base (e.g., Elasticsearch), using hard filters and boosted scoring as previously described.
-    *   **Output:** Returns a structured list of the top N matching cases.
-
-*   **`SynthesizeCaseAnalysis(retrieved_cases: list, user_factors: dict)`:**
-    *   **Purpose:** To generate the final, human-readable summary.
-    *   **Logic:** It takes the retrieved cases and the user's situation. It identifies the case archetype, calculates the typical sentencing range for those cases, and formulates a nuanced, easy-to-understand explanation for the user, including the all-important disclaimers.
-    *   **Output:** Returns the final analysis text for the user.
-
-**3. Example ReAct Conversational Flow**
-
-1.  **User Input:** "I got into a fight and the other person was hurt."
-2.  **Cycle 1:**
-    *   **Thought:** The user has described a situation that sounds like "Intentional Injury." I have very little information. I need to gather the key facts. My next action should be to generate the standard questionnaire for this type of crime.
-    *   **Action:** `GenerateGuidedQuestionnaire(crime_type="Intentional Injury", known_factors={})`
-    *   **Observation:** (The agent receives the formatted questionnaire string from the tool.)
-    *(The agent presents this questionnaire to the user.)*
-3.  **User Response:** (The user answers the questions about injury severity, weapons, compensation, etc.)
-4.  **Cycle 2:**
-    *   **Thought:** The user has answered the questionnaire. I have now extracted the key factors: `injury_level="serious"`, `weapon_used=false`, `compensation_paid=true`. I have enough information to find similar cases. My next action is to query the knowledge base.
-    *   **Action:** `QueryKnowledgeBase(crime_type="Intentional Injury", known_factors={"injury_level": "serious", ...})`
-    *   **Observation:** (The agent receives a list of the top 5 most similar cases from the KB.)
-5.  **Cycle 3:**
-    *   **Thought:** I have the most relevant cases. Now I need to analyze them and present a clear summary to the user. My final action is to synthesize these findings.
-    *   **Action:** `SynthesizeCaseAnalysis(retrieved_cases=[...], user_factors={"injury_level": "serious", ...})`
-    *   **Observation:** (The agent receives the final summary text.)
-    *(The agent presents the final analysis to the user.)*
-
-This ReAct-based approach provides a clear, powerful, and auditable framework for building our intelligent legal advisor.
-
-### 3.6 Result Presentation and Synthesis
-
-Once the most relevant cases are retrieved, the agent moves to the final stage of synthesizing and presenting the information. Leveraging the cluster analysis, the agent can provide more nuanced insights:
-
-*   It can identify the case archetype the user's situation belongs to: "Your situation appears similar to a common group of cases characterized by [Key Factor 1] and [Key Factor 2]."
-*   It will present the typical sentencing range for that specific group: "In this group of cases, sentences typically range from X to Y months."
-*   It will highlight the key differentiators learned from the analysis: "A critical factor we've seen in these cases is [Important Factor C]. How does that apply to your situation?"
-*   This approach, grounded in data-driven archetypes, allows the agent to provide explanations that are more concrete and understandable than a simple statistical prediction.
-
-## 5. Data
-
-The project will use the **CAIL2018 dataset**, specifically the large-scale collection of criminal legal documents. The dataset's JSON structure, with a clear `fact` and `meta` (outcome) separation, is ideal for this supervised learning and extraction task.
-
-## 6. Evaluation
-
-The system's performance will be evaluated across its different components:
-*   **Knowledge Extraction:** The accuracy of the LLM-based extraction can be measured by creating a small, manually-annotated "gold standard" set of structured cases and calculating precision, recall, and F1-score against it.
-*   **Case Grouping Quality:** The quality of the discovered case archetypes can be evaluated using clustering metrics like the Silhouette Score. We can also perform qualitative analysis to ensure the clusters are legally coherent and meaningful.
-*   **Conversational Agent:** Agent quality can be assessed through user studies, measuring task success rate (was the user able to get relevant case information?), conversation length, and user satisfaction scores.
-
-## 7. Ethical Considerations & Disclaimers
-
-This is of paramount importance. The agent must repeatedly and clearly state that it is **not a lawyer** and that its output **does not constitute legal advice**. All information should be presented as being for educational and informational purposes only. The system should strongly encourage users to consult with a qualified legal professional for advice on their specific situation. The potential for misuse or over-reliance on the agent's suggestions must be mitigated through careful design of its conversational script and user interface.
+Add `OPENROUTER_API_KEY=...` to your `.env` (see `env.example`) to enable it.

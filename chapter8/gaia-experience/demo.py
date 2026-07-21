@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent))
 from experience_agent import ExperienceAgent
 from knowledge_base import KnowledgeBase
 from trajectory_summarizer import TrajectorySummarizer
+from llm_env import resolve_llm, DEFAULT_MODEL
 from AWorld.aworld.config.conf import AgentConfig, TaskConfig
 from AWorld.aworld.core.task import Task
 
@@ -128,17 +129,14 @@ class ExperienceLearningDemo:
         print("DEMO 2: Trajectory Summarization")
         print("="*60)
         
-        # Initialize summarizer
-        agent_config = AgentConfig(
-            llm_provider=os.getenv("LLM_PROVIDER", "openai"),
-            llm_model_name=self.config.get('learning', {}).get('summarizer', {}).get('model', 'gpt-4o-mini'),
-            llm_api_key=os.getenv("LLM_API_KEY"),
-            llm_base_url=os.getenv("LLM_BASE_URL")
-        )
-        
+        # Initialize summarizer（OpenAI 直连，缺 Key 时 OpenRouter 兜底）
+        summarizer_model = self.config.get('learning', {}).get('summarizer', {}).get('model', DEFAULT_MODEL)
+        llm_kwargs = resolve_llm(model_override=summarizer_model)
+        agent_config = AgentConfig(**llm_kwargs)
+
         self.summarizer = TrajectorySummarizer(
             llm_config=agent_config,
-            model_name=self.config.get('learning', {}).get('summarizer', {}).get('model', 'gpt-4o-mini')
+            model_name=llm_kwargs["llm_model_name"]
         )
         
         # Create sample trajectory
@@ -199,12 +197,9 @@ class ExperienceLearningDemo:
         print("DEMO 3: Experience Agent")
         print("="*60)
         
-        # Initialize agent with all features
+        # Initialize agent with all features（OpenAI 直连，缺 Key 时 OpenRouter 兜底）
         agent_config = AgentConfig(
-            llm_provider=os.getenv("LLM_PROVIDER", "openai"),
-            llm_model_name=os.getenv("LLM_MODEL_NAME", "gpt-4o"),
-            llm_base_url=os.getenv("LLM_BASE_URL"),
-            llm_api_key=os.getenv("LLM_API_KEY"),
+            **resolve_llm(),
             llm_temperature=0.0
         )
         

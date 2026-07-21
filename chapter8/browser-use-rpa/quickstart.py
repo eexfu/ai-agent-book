@@ -9,6 +9,7 @@ import asyncio
 from dotenv import load_dotenv
 from browser_use import ChatOpenAI, ChatGoogle
 from learning_agent import LearningAgent
+from llm_factory import make_llm
 
 # Load environment variables
 load_dotenv()
@@ -21,7 +22,7 @@ async def example_search():
     
     agent = LearningAgent(
         task="Go to Google and search for 'browser automation with AI'",
-        llm=ChatOpenAI(model="gpt-4o-mini"),
+        llm=make_llm(),
         knowledge_base_path="./my_knowledge",
         headless=False  # Show browser
     )
@@ -39,7 +40,7 @@ async def example_weather():
     
     agent = LearningAgent(
         task="Check the weather forecast for Tokyo",
-        llm=ChatGoogle(model="gemini-2.0-flash-exp"),  # You can use different LLMs
+        llm=ChatGoogle(model="gemini-3.5-flash"),  # You can use different LLMs
         knowledge_base_path="./my_knowledge",
         headless=False
     )
@@ -51,7 +52,7 @@ async def example_weather():
     print("\n   Running again for New York...")
     agent2 = LearningAgent(
         task="Check the weather forecast for New York",
-        llm=ChatGoogle(model="gemini-2.0-flash-exp"),
+        llm=ChatGoogle(model="gemini-3.5-flash"),
         knowledge_base_path="./my_knowledge",
         headless=False
     )
@@ -78,7 +79,7 @@ async def example_custom_task():
     
     agent = LearningAgent(
         task=task,
-        llm=ChatOpenAI(model="gpt-4o-mini"),
+        llm=make_llm(),
         knowledge_base_path="./my_knowledge",
         headless=False
     )

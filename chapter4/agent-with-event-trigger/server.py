@@ -9,12 +9,34 @@ from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from agent import EventTriggeredAgent, SystemHintConfig
+from agent import EventTriggeredAgent, SystemHintConfig, resolve_provider_and_key
 from event_types import Event, EventType
 import threading
 import time
 import asyncio
+import argparse
 import uvicorn
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var; fall back to default (with a warning) if malformed."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"Invalid {name} value: {raw!r} (must be an integer); using default {default}")
+        return default
+
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -98,26 +120,25 @@ async def init_agent():
     """Initialize the agent with optional MCP tools"""
     global agent, mcp_loading_status
     
-    # Determine provider from environment
-    provider = os.getenv("LLM_PROVIDER", "kimi").lower()
-    
-    # Get API key based on provider
-    if provider == "siliconflow":
-        api_key = os.getenv("SILICONFLOW_API_KEY")
-    elif provider == "doubao":
-        api_key = os.getenv("DOUBAO_API_KEY")
-    elif provider in ["kimi", "moonshot"]:
-        api_key = os.getenv("KIMI_API_KEY")
-    elif provider == "openrouter":
-        api_key = os.getenv("OPENROUTER_API_KEY")
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
-    
+    # Determine provider from environment (universal OpenRouter fallback applied)
+    requested_provider = os.getenv("LLM_PROVIDER", "kimi").lower()
+    provider, api_key = resolve_provider_and_key(requested_provider)
+
     if not api_key:
-        raise ValueError(f"API key not set for provider '{provider}'. Set the appropriate environment variable.")
-    
+        raise ValueError(
+            f"API key not set for provider '{requested_provider}'. Set the appropriate "
+            f"environment variable, or set OPENROUTER_API_KEY as a universal fallback."
+        )
+
     # Get model from environment if specified
     model = os.getenv("LLM_MODEL")
+    if provider != requested_provider:
+        logger.info(
+            f"ℹ️ provider '{requested_provider}' has no key; falling back to OpenRouter."
+        )
+        # Keep an explicit provider/model id; otherwise use OpenRouter's default.
+        if not (model and "/" in model):
+            model = None
     
     # Check if MCP should be enabled (default: true)
     enable_mcp = os.getenv("ENABLE_MCP_TOOLS", "true").lower() not in ["false", "0", "no"]
@@ -130,7 +151,7 @@ async def init_agent():
         enable_system_state=True,
         save_trajectory=True,
         trajectory_file="event_agent_trajectory.json",
-        temperature=0.7,
+        temperature=_reasoning_safe_temperature(model, 0.7),
         max_tokens=4096,
         use_mcp_servers=enable_mcp
     )
@@ -372,27 +393,72 @@ async def unregister_process(process: ProcessUnregister):
 # Main Entry Point
 # ============================================================================
 
+def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器（命令行参数优先级高于环境变量）。"""
+    parser = argparse.ArgumentParser(
+        description="事件驱动 Agent 的 HTTP 服务器（FastAPI）："
+                    "对外暴露 /event 等接口，把 Webhook 式的外部回调转成事件唤醒 Agent。",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例：
+  python server.py                       # 使用默认配置（端口 8000，启用 MCP 工具）
+  python server.py --port 9000           # 自定义端口
+  python server.py --provider doubao     # 指定大模型提供商
+  python server.py --no-mcp              # 只用内置工具，不加载 MCP 工具
+  之后用客户端发送事件：python client.py --mode test
+""",
+    )
+    parser.add_argument(
+        "--host", default=os.getenv("AGENT_HOST", "0.0.0.0"),
+        help="监听地址（默认：0.0.0.0）",
+    )
+    parser.add_argument(
+        "--port", type=int, default=_env_int("AGENT_PORT", 8000),
+        help="监听端口（默认：环境变量 AGENT_PORT 或 8000）",
+    )
+    parser.add_argument(
+        "--provider", default=None,
+        choices=["siliconflow", "doubao", "kimi", "moonshot", "openrouter"],
+        help="大模型提供商（默认：环境变量 LLM_PROVIDER 或 kimi）",
+    )
+    parser.add_argument(
+        "--model", default=None,
+        help="模型名覆盖（默认：使用提供商默认模型）",
+    )
+    parser.add_argument(
+        "--no-mcp", action="store_true",
+        help="禁用 MCP 工具，只使用内置工具（等价于 ENABLE_MCP_TOOLS=false）",
+    )
+    return parser
+
+
 def main():
     """Main entry point"""
+    args = build_parser().parse_args()
+
+    # 命令行参数覆盖环境变量：init_agent() 在 lifespan 中读取这些环境变量
+    if args.provider:
+        os.environ["LLM_PROVIDER"] = args.provider
+    if args.model:
+        os.environ["LLM_MODEL"] = args.model
+    if args.no_mcp:
+        os.environ["ENABLE_MCP_TOOLS"] = "false"
+
     print("\n" + "="*80)
     print("🤖 EVENT-TRIGGERED AGENT SERVER (FastAPI)")
     print("="*80)
     print()
-    
-    # Get port from environment
-    port = int(os.getenv('AGENT_PORT', '8000'))
-    
-    print(f"✅ Starting server on port {port}")
-    print(f"📡 API Documentation: http://localhost:{port}/docs")
-    print(f"📊 ReDoc: http://localhost:{port}/redoc")
+
+    print(f"✅ Starting server on {args.host}:{args.port}")
+    print(f"📡 API Documentation: http://localhost:{args.port}/docs")
+    print(f"📊 ReDoc: http://localhost:{args.port}/redoc")
     print()
     print("="*80 + "\n")
-    
+
     # Run with uvicorn
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=port,
+        host=args.host,
+        port=args.port,
         log_level="info"
     )
 

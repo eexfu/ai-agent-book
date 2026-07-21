@@ -50,7 +50,7 @@ check_prerequisites() {
         cat > .env << EOF
 # LLM Configuration
 LLM_PROVIDER=openai
-LLM_MODEL_NAME=gpt-4o
+LLM_MODEL_NAME=gpt-5.6-luna
 LLM_API_KEY=your_api_key_here
 # LLM_BASE_URL=https://api.openai.com/v1
 
@@ -94,10 +94,11 @@ GAIA Experience Learning System Runner
 Usage: ./run.sh [COMMAND] [OPTIONS]
 
 Commands:
-  demo              Run the interactive demo
+  demo             Run the interactive demo
   learn            Run in learning mode (capture experiences)
   apply            Run with experience application
   full             Run with both learning and application
+  compare          A/B compare baseline vs. experience reuse on the same tasks
   index            Index the validation dataset
   test             Run a specific test case
   help             Show this help message
@@ -107,6 +108,8 @@ Options:
   --end N          End index (default: 10)
   --split TYPE     Dataset split: validation/test (default: validation)
   --task-id ID     Specific task ID to run
+  --model NAME     Main agent model (overrides LLM_MODEL_NAME)
+  --output PATH    Results JSON output path
   --no-preload     Don't preload knowledge base
 
 Examples:
@@ -114,7 +117,12 @@ Examples:
   ./run.sh learn --start 0 --end 5    # Learn from first 5 questions
   ./run.sh apply --start 5 --end 10   # Apply experiences to questions 5-10
   ./run.sh full                       # Run complete workflow
+  ./run.sh compare --start 10 --end 20  # A/B: baseline vs. experience reuse
   ./run.sh test --task-id "task-123"  # Run specific task
+
+Note: For a fair 'compare', first accumulate experiences on OTHER tasks, e.g.
+  ./run.sh learn --start 0 --end 10
+  ./run.sh compare --start 10 --end 20
 
 EOF
 }
@@ -142,6 +150,14 @@ while [[ $# -gt 0 ]]; do
             TASK_ID="$2"
             shift 2
             ;;
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
+        --output)
+            OUTPUT="$2"
+            shift 2
+            ;;
         --no-preload)
             NO_PRELOAD=true
             shift
@@ -153,6 +169,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Compose optional pass-through args (model / output)
+EXTRA_ARGS=""
+if [ -n "$MODEL" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --model $MODEL"
+fi
+if [ -n "$OUTPUT" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --output $OUTPUT"
+fi
 
 # Execute command
 case $COMMAND in
@@ -173,9 +198,10 @@ case $COMMAND in
             --learning-mode \
             --start "$START_IDX" \
             --end "$END_IDX" \
-            --split "$SPLIT"
+            --split "$SPLIT" \
+            $EXTRA_ARGS
         ;;
-        
+
     apply)
         print_info "Running with experience application..."
         print_info "Processing questions $START_IDX to $END_IDX from $SPLIT split"
@@ -192,9 +218,10 @@ case $COMMAND in
             $PRELOAD_FLAG \
             --start "$START_IDX" \
             --end "$END_IDX" \
-            --split "$SPLIT"
+            --split "$SPLIT" \
+            $EXTRA_ARGS
         ;;
-        
+
     full)
         print_info "Running with full experience learning..."
         print_info "Processing questions $START_IDX to $END_IDX from $SPLIT split"
@@ -212,9 +239,30 @@ case $COMMAND in
             $PRELOAD_FLAG \
             --start "$START_IDX" \
             --end "$END_IDX" \
-            --split "$SPLIT"
+            --split "$SPLIT" \
+            $EXTRA_ARGS
         ;;
-        
+
+    compare)
+        print_info "Running A/B comparison (baseline vs. experience reuse)..."
+        print_info "Evaluating questions $START_IDX to $END_IDX from $SPLIT split twice"
+        check_prerequisites
+        setup_environment
+
+        PRELOAD_FLAG=""
+        if [ "$NO_PRELOAD" == true ]; then
+            PRELOAD_FLAG=""
+        fi
+
+        python run_with_experience.py \
+            --compare \
+            $PRELOAD_FLAG \
+            --start "$START_IDX" \
+            --end "$END_IDX" \
+            --split "$SPLIT" \
+            $EXTRA_ARGS
+        ;;
+
     index)
         print_info "Indexing validation dataset..."
         check_prerequisites

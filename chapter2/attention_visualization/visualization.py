@@ -12,6 +12,32 @@ import json
 from pathlib import Path
 
 
+def _configure_cjk_font():
+    """
+    Best-effort: pick a CJK-capable font so Chinese token labels (e.g. the
+    '北京 的 天气 怎么样' example from Chapter 2) render as glyphs instead of
+    tofu boxes. Silently no-ops if none is installed.
+    """
+    from matplotlib import font_manager
+    candidates = [
+        "Arial Unicode MS", "PingFang SC", "Hiragino Sans GB", "Heiti SC",
+        "Songti SC", "STHeiti", "Noto Sans CJK SC", "Noto Sans CJK JP",
+        "Microsoft YaHei", "WenQuanYi Zen Hei", "SimHei",
+    ]
+    available = {f.name for f in font_manager.fontManager.ttflist}
+    for name in candidates:
+        if name in available:
+            plt.rcParams["font.sans-serif"] = [name] + list(
+                plt.rcParams.get("font.sans-serif", [])
+            )
+            plt.rcParams["axes.unicode_minus"] = False
+            return name
+    return None
+
+
+_configure_cjk_font()
+
+
 def create_attention_heatmap(
     attention_weights: List[List[float]],
     input_tokens: List[str],
@@ -388,6 +414,204 @@ def visualize_results(
             plt.close(fig)
     
     print(f"Visualizations saved to {output_path}")
+
+
+def clean_token_labels(tokens: List[str], max_len: int = 14) -> List[str]:
+    """
+    Make raw tokenizer tokens readable as axis labels.
+
+    Replaces whitespace with visible glyphs and truncates very long
+    special tokens so the heatmap axes stay legible.
+    """
+    cleaned = []
+    for tok in tokens:
+        label = tok.replace("\n", "\\n").replace("\t", "\\t")
+        # Qwen byte-level space marker and plain spaces -> visible middle dot
+        label = label.replace("Ġ", " ").replace("Ġ", " ")
+        if label.strip() == "":
+            label = "␣"
+        if len(label) > max_len:
+            label = label[:max_len - 1] + "…"
+        cleaned.append(label)
+    return cleaned
+
+
+def attention_sink_stats(attention_matrix: np.ndarray, sink_index: int = 0) -> Dict[str, float]:
+    """
+    Compute how much attention lands on a single "sink" column.
+
+    Averages, over every query row that can see the sink column, the
+    attention weight assigned to ``sink_index``. This quantifies the
+    "attention sink" phenomenon described in Chapter 2 without inventing
+    any numbers - it is measured directly from the model's own weights.
+
+    Returns a dict with the mean and max sink share (0..1).
+    """
+    matrix = np.asarray(attention_matrix, dtype=float)
+    if matrix.ndim != 2 or matrix.shape[0] == 0:
+        return {"mean_sink_share": 0.0, "max_sink_share": 0.0}
+
+    shares = []
+    for row_idx in range(matrix.shape[0]):
+        # A causal row only attends to positions <= row_idx.
+        if row_idx < sink_index:
+            continue
+        row = matrix[row_idx, : row_idx + 1]
+        total = row.sum()
+        if total > 0:
+            shares.append(float(matrix[row_idx, sink_index] / total))
+
+    if not shares:
+        return {"mean_sink_share": 0.0, "max_sink_share": 0.0}
+    return {
+        "mean_sink_share": float(np.mean(shares)),
+        "max_sink_share": float(np.max(shares)),
+    }
+
+
+def create_layer_attention_heatmap(
+    attention_matrix: np.ndarray,
+    tokens: List[str],
+    title: str = "Attention Heatmap",
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (12, 10),
+    cmap: str = "viridis",
+    context_boundary: Optional[int] = None,
+    annotate_sink: bool = True,
+) -> plt.Figure:
+    """
+    Plot a full [seq x seq] self-attention matrix for one layer/head.
+
+    Rows are Query positions (the token doing the attending) and columns
+    are Key positions (the token being attended to). Because generation is
+    causal, the matrix is lower-triangular - each token only sees itself
+    and the tokens before it, producing the triangular pattern discussed
+    in Chapter 2.
+
+    Args:
+        attention_matrix: 2D array [seq, seq]. Upper triangle is masked out.
+        tokens: Token strings for both axes (length seq).
+        title: Plot title.
+        save_path: Optional path to save the PNG.
+        figsize: Figure size.
+        cmap: Matplotlib colormap.
+        context_boundary: If given, draws a line where the prompt ends and
+            generated tokens begin.
+        annotate_sink: If True, annotate the measured attention-sink share.
+
+    Returns:
+        matplotlib Figure object.
+    """
+    matrix = np.asarray(attention_matrix, dtype=float)
+    seq_len = matrix.shape[0]
+
+    # Mask the (structurally zero) upper triangle so it renders blank
+    # instead of dark, making the causal triangle obvious.
+    masked = np.ma.array(matrix, mask=np.triu(np.ones_like(matrix, dtype=bool), k=1))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad(color="#f0f0f0")
+    im = ax.imshow(masked, cmap=cmap_obj, aspect="auto")
+
+    labels = clean_token_labels(tokens)
+    # Avoid an unreadable wall of labels for long sequences.
+    if seq_len <= 80:
+        ticks = np.arange(seq_len)
+    else:
+        step = int(np.ceil(seq_len / 80))
+        ticks = np.arange(0, seq_len, step)
+    tick_labels = [labels[i] for i in ticks]
+
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(tick_labels, rotation=90, fontsize=6)
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(tick_labels, fontsize=6)
+
+    if context_boundary is not None and 0 < context_boundary < seq_len:
+        ax.axvline(x=context_boundary - 0.5, color="red", linewidth=1.2,
+                   linestyle="--", label="Prompt / Generated boundary")
+        ax.axhline(y=context_boundary - 0.5, color="red", linewidth=1.2,
+                   linestyle="--")
+        ax.legend(loc="lower left", fontsize=8)
+
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Attention Weight", rotation=270, labelpad=15)
+
+    ax.set_xlabel("Key position (attended to)", fontsize=11)
+    ax.set_ylabel("Query position (attending from)", fontsize=11)
+
+    if annotate_sink:
+        stats = attention_sink_stats(matrix, sink_index=0)
+        title = (f"{title}\nAttention sink (token 0): "
+                 f"mean {stats['mean_sink_share'] * 100:.1f}% / "
+                 f"max {stats['max_sink_share'] * 100:.1f}% of each row")
+
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    return fig
+
+
+def create_attention_comparison(
+    matrices: List[np.ndarray],
+    tokens_list: List[List[str]],
+    titles: List[str],
+    save_path: Optional[str] = None,
+    figsize: Optional[Tuple[int, int]] = None,
+    cmap: str = "viridis",
+    suptitle: str = "Attention Pattern Comparison",
+) -> plt.Figure:
+    """
+    Plot several [seq x seq] attention matrices side by side for comparison.
+
+    Used to contrast attention patterns - e.g. two different layers, two
+    prompts, or with-tools vs without-tools - as described in Chapter 2.
+    """
+    n = len(matrices)
+    if figsize is None:
+        figsize = (7 * n, 6)
+    fig, axes = plt.subplots(1, n, figsize=figsize)
+    if n == 1:
+        axes = [axes]
+
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad(color="#f0f0f0")
+
+    for ax, matrix, tokens, title in zip(axes, matrices, tokens_list, titles):
+        matrix = np.asarray(matrix, dtype=float)
+        masked = np.ma.array(matrix, mask=np.triu(np.ones_like(matrix, dtype=bool), k=1))
+        im = ax.imshow(masked, cmap=cmap_obj, aspect="auto")
+
+        seq_len = matrix.shape[0]
+        labels = clean_token_labels(tokens)
+        if seq_len <= 40:
+            ticks = np.arange(seq_len)
+        else:
+            step = int(np.ceil(seq_len / 40))
+            ticks = np.arange(0, seq_len, step)
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([labels[i] for i in ticks], rotation=90, fontsize=5)
+        ax.set_yticks(ticks)
+        ax.set_yticklabels([labels[i] for i in ticks], fontsize=5)
+
+        stats = attention_sink_stats(matrix, sink_index=0)
+        ax.set_title(f"{title}\nsink mean {stats['mean_sink_share'] * 100:.1f}%",
+                     fontsize=10, fontweight="bold")
+        ax.set_xlabel("Key position", fontsize=9)
+        ax.set_ylabel("Query position", fontsize=9)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.suptitle(suptitle, fontsize=13, fontweight="bold")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    return fig
 
 
 if __name__ == "__main__":

@@ -28,39 +28,60 @@ from ablation_utils import (
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run Tau-Bench with ablation study options")
-    
+    parser = argparse.ArgumentParser(
+        description=(
+            "提示工程消融实验（实验 2-4）：基于 Tau-Bench 逐个降解提示工程要素，"
+            "量化其对任务成功率的影响。\n"
+            "三个消融维度：语气风格（--tone-style）、信息组织（--randomize-wiki）、"
+            "工具描述（--remove-tool-descriptions）。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例：\n"
+            "  # 基线（结构化提示词 + 完整工具描述 + 专业中立语气），跑前 10 个任务\n"
+            "  python run_ablation.py --model gpt-5.6-luna --env airline --end-index 10\n\n"
+            "  # 单个消融：打乱 wiki 规则的组织结构\n"
+            "  python run_ablation.py --env airline --randomize-wiki --end-index 10\n\n"
+            "  # 一键跑完整套消融并打印对比表（基线 + 各维度 + 全部叠加）\n"
+            "  python run_ablation.py --env airline --all --end-index 10\n\n"
+            "  # 跑完后单独汇总分析：python analyze_results.py\n"
+        ),
+    )
+
     # Original arguments
-    parser.add_argument("--num-trials", type=int, default=1)
+    parser.add_argument(
+        "--num-trials", type=int, default=1,
+        help="每个任务重复运行的次数（默认：1）"
+    )
     parser.add_argument(
         "--env", type=str, choices=["retail", "airline"], default="airline",
-        help="Environment to run (default: airline for demonstration)"
+        help="运行的场景环境：airline（航空客服）或 retail（零售客服），默认 airline"
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="openai/gpt-5",
-        help="The model to use for the agent (default: openai/gpt-5)",
+        default="gpt-5.6-luna",
+        help="The model to use for the agent (default: gpt-5.6-luna; routed via OpenRouter when OPENROUTER_API_KEY is set, else OpenAI direct)",
     )
     parser.add_argument(
         "--model-provider",
         type=str,
         choices=provider_list,
         default=None,  # Will be set based on model
-        help="The model provider for the agent (default: openrouter for openai/gpt-5)",
+        help="The model provider for the agent (default: openai; a model id containing '/' auto-selects openrouter)",
     )
     parser.add_argument(
         "--user-model",
         type=str,
-        default="openai/gpt-5",
-        help="The model to use for the user simulator (default: openai/gpt-5)",
+        default="gpt-5.6-luna",
+        help="The model to use for the user simulator (default: gpt-5.6-luna; routed via OpenRouter when OPENROUTER_API_KEY is set, else OpenAI direct)",
     )
     parser.add_argument(
         "--user-model-provider",
         type=str,
         choices=provider_list,
         default=None,  # Will be set based on model
-        help="The model provider for the user simulator (default: openrouter for openai/gpt-5)",
+        help="The model provider for the user simulator (default: openai; a model id containing '/' auto-selects openrouter)",
     )
     parser.add_argument(
         "--agent-strategy",
@@ -101,53 +122,83 @@ def parse_args():
         type=str,
         choices=["default", "trump", "casual"],
         default="default",
-        help="Tone style for the agent: default (neutral), trump (Donald Trump style), or casual (fun with emojis)"
+        help="维度一·语气风格：default（专业中立，基线）、trump（Trump 夸张风格）、casual（大量表情符号的休闲风格）"
     )
-    
+
     parser.add_argument(
         "--randomize-wiki",
         action="store_true",
-        help="Randomize the order of rules in wiki.md"
+        help="维度二·信息组织：打乱 wiki 规则的组织结构（去除标题层次，规则平铺为无序列表）"
     )
-    
+
     parser.add_argument(
         "--remove-tool-descriptions",
         action="store_true",
-        help="Remove all tool and parameter descriptions"
+        help="维度三·工具描述：保留函数签名与参数，但移除所有描述性文本"
     )
-    
+
     parser.add_argument(
         "--ablation-name",
         type=str,
         default="",
-        help="Custom name for this ablation experiment"
+        help="本次消融实验的自定义名称（用于结果文件名标识）"
     )
-    
+
+    parser.add_argument(
+        "--all",
+        dest="run_all",
+        action="store_true",
+        help="一键运行完整消融套件（基线 + 各单维度 + 全部叠加），结束后打印成功率对比表"
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="（仅 --all 模式）将套件汇总统计写入该 JSON 文件路径（默认写入 log-dir/ablation_summary_<时间戳>.json）"
+    )
+
     parser.add_argument(
         "--no-verbose",
         action="store_true",
-        help="Disable verbose output (default: verbose is enabled)"
+        help="关闭详细输出（默认开启 verbose）"
     )
-    
+
     args = parser.parse_args()
     
     # Set verbose flag (defaults to True unless --no-verbose is used)
     args.verbose = not args.no_verbose
     
-    # Set default provider based on model if not specified
+    # Set default provider based on model if not specified.
+    # A model id containing "/" (e.g. "openai/gpt-5") is an OpenRouter-style id and
+    # routes through openrouter (requires a valid OPENROUTER_API_KEY); a bare id
+    # (e.g. "gpt-4o-mini") routes through OpenAI direct (requires OPENAI_API_KEY).
     if args.model_provider is None:
-        if args.model == "openai/gpt-5":
-            args.model_provider = "openrouter"
-        else:
-            args.model_provider = "openai"
-    
+        args.model_provider = "openrouter" if "/" in args.model else "openai"
+
     # Set default user model provider based on user model if not specified
     if args.user_model_provider is None:
-        if args.user_model == "openai/gpt-5":
+        args.user_model_provider = "openrouter" if "/" in args.user_model else "openai"
+
+    # Universal fallback: if the resolved provider is OpenAI-direct but
+    # OPENAI_API_KEY is missing while OPENROUTER_API_KEY is present, route the
+    # bare gpt-* / o1-* id through OpenRouter (prefix "openai/"). Preserves the
+    # default (OpenAI-direct) behavior whenever OPENAI_API_KEY is set.
+    # gpt-5.x (incl. gpt-5.6*) needs OpenAI org-verification on the direct API, so
+    # when an OPENROUTER_API_KEY is present we route these ids (and any bare
+    # gpt-*/o1-* when OPENAI_API_KEY is missing) through OpenRouter (prefix
+    # "openai/"). Direct-OpenAI behavior is preserved otherwise.
+    if os.environ.get("OPENROUTER_API_KEY"):
+        no_openai = not os.environ.get("OPENAI_API_KEY")
+        if args.model_provider == "openai" and (no_openai or args.model.lower().startswith("gpt-5")):
+            args.model_provider = "openrouter"
+            if "/" not in args.model:
+                args.model = "openai/" + args.model
+        if args.user_model_provider == "openai" and (no_openai or args.user_model.lower().startswith("gpt-5")):
             args.user_model_provider = "openrouter"
-        else:
-            args.user_model_provider = "openai"
-    
+            if "/" not in args.user_model:
+                args.user_model = "openai/" + args.user_model
+
     return args
 
 
@@ -356,9 +407,75 @@ def run_with_ablation(args):
     return results
 
 
+# Full ablation suite: (name, {modifications}) covering the three dimensions
+# described in the book (实验 2-4): tone / information organization / tool descriptions.
+ABLATION_SUITE = [
+    ("baseline",      {"tone_style": "default", "randomize_wiki": False, "remove_tool_descriptions": False}),
+    ("tone_trump",    {"tone_style": "trump",   "randomize_wiki": False, "remove_tool_descriptions": False}),
+    ("tone_casual",   {"tone_style": "casual",  "randomize_wiki": False, "remove_tool_descriptions": False}),
+    ("wiki_random",   {"tone_style": "default", "randomize_wiki": True,  "remove_tool_descriptions": False}),
+    ("no_tool_desc",  {"tone_style": "default", "randomize_wiki": False, "remove_tool_descriptions": True}),
+    ("all_ablations", {"tone_style": "casual",  "randomize_wiki": True,  "remove_tool_descriptions": True}),
+]
+
+
+def run_full_suite(args):
+    """Run every experiment in ABLATION_SUITE in-process, then print one
+    comparison table so the final experimental result is produced by a single
+    command."""
+    from analyze_results import (
+        calculate_statistics,
+        print_results_table,
+        analyze_ablation_impact,
+    )
+
+    suite_results = {}
+    for name, mods in ABLATION_SUITE:
+        args.tone_style = mods["tone_style"]
+        args.randomize_wiki = mods["randomize_wiki"]
+        args.remove_tool_descriptions = mods["remove_tool_descriptions"]
+        # Leave ablation_name empty: run_with_ablation already derives a descriptive
+        # suffix from the active flags (e.g. "tone_trump", "no_tool_desc"). Setting it
+        # to `name` here would double the suffix in the checkpoint filename
+        # (e.g. "no_tool_desc_no_tool_desc"). The comparison table is keyed by `name`
+        # from ABLATION_SUITE below, independent of the filename.
+        args.ablation_name = ""
+
+        print("\n" + "=" * 80)
+        print(f"▶️  Running experiment: {name}")
+        print("=" * 80)
+
+        results = run_with_ablation(args)
+        suite_results[name] = [float(r.reward) for r in results]
+
+    # Final comparison across all techniques
+    print_results_table(suite_results)
+    analyze_ablation_impact(suite_results)
+
+    # Persist the aggregated summary
+    output_path = args.output
+    if not output_path:
+        time_str = datetime.now().strftime("%m%d%H%M%S")
+        output_path = f"{args.log_dir}/ablation_summary_{time_str}.json"
+    if not os.path.exists(args.log_dir):
+        os.makedirs(args.log_dir)
+    summary = {
+        name: {"rewards": rewards, **calculate_statistics(rewards)}
+        for name, rewards in suite_results.items()
+    }
+    with open(output_path, "w") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    print(f"\n📄 Suite summary saved to {output_path}\n")
+
+    return suite_results
+
+
 def main():
     args = parse_args()
-    run_with_ablation(args)
+    if args.run_all:
+        run_full_suite(args)
+    else:
+        run_with_ablation(args)
 
 
 if __name__ == "__main__":

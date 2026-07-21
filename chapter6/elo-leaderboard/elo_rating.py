@@ -26,7 +26,7 @@ class EloRatingSystem:
         self.k_factor = k_factor
         self.ratings: Dict[str, float] = {}
         self.match_counts: Dict[str, int] = {}
-        self.win_counts: Dict[str, int] = {}
+        self.win_counts: Dict[str, float] = {}  # ties add 0.5, so this is float
     
     def get_rating(self, model: str) -> float:
         """Get current rating for a model, initializing if necessary."""
@@ -80,6 +80,11 @@ class EloRatingSystem:
             self.win_counts[model_b] = self.win_counts.get(model_b, 0) + 1
         else:  # tie
             score_a, score_b = 0.5, 0.5
+            # A tie counts as half a win for each side, keeping win_counts (and
+            # the win-rate derived from it) consistent with the 0.5-per-tie
+            # convention used elsewhere (leaderboard win-rate matrix, CLI stats).
+            self.win_counts[model_a] = self.win_counts.get(model_a, 0) + 0.5
+            self.win_counts[model_b] = self.win_counts.get(model_b, 0) + 0.5
         
         # Update ratings using Elo formula
         new_rating_a = rating_a + self.k_factor * (score_a - expected_a)

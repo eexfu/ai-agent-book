@@ -67,13 +67,16 @@ A text-based treasure hunt game where agents must:
 
 ```bash
 # Navigate to the project directory
-cd projects/week1/learning-from-experience
+cd chapter1/learning-from-experience
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### Setting up Kimi K2 API
+> 对应书中**实验 7-1（Q-learning 在寻宝游戏中的表现）**与**实验 7-2（传统 RL 与 LLM Agent 的对比研究）**。
+> Q-learning 部分完全离线运行、无需任何 API Key；LLM 部分需要 Moonshot/Kimi API Key。
+
+### Setting up Kimi K3 API
 
 To run the LLM experiments, you need a Kimi (Moonshot) API key:
 
@@ -89,6 +92,14 @@ Or create a `.env` file:
 echo "MOONSHOT_API_KEY=your-api-key-here" > .env
 ```
 
+**通用兜底（OpenRouter）**：若未设置 `MOONSHOT_API_KEY` 但设置了 `OPENROUTER_API_KEY`，
+LLM 部分会自动改走 OpenRouter。由于 Kimi 模型在 OpenRouter 上不稳定可用，兜底时会使用
+`OPENROUTER_MODEL`（默认 `openai/gpt-5.6-luna`）：
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key-here
+python quick_demo.py   # MOONSHOT_API_KEY 缺失时自动经 OpenRouter 运行
+```
+
 ### Running the Experiment
 
 #### Quick Demo (See LLM Learning in Action)
@@ -102,32 +113,58 @@ This shows a detailed view of how the LLM learns through reasoning, displaying:
 - How experiences accumulate and influence future decisions
 - The dramatic difference in learning speed vs traditional RL
 
-#### Full Comparison (RL vs LLM)
+#### Command-Line Interface (`experiment.py`)
+
+`experiment.py` 现在提供带中文帮助的完整 CLI。查看所有参数：
 
 ```bash
-python experiment.py
+python experiment.py --help
+```
+
+主要参数：
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| `--mode {both,qlearning,rl,llm}` | 运行哪种智能体：`qlearning`/`rl` 只跑 Q-learning（离线）、`llm` 只跑 LLM Agent、`both` 两者对比 | `both` |
+| `--rl-episodes` | Q-learning 训练局数（实验 7-1 用 10000） | `10000` |
+| `--llm-episodes` | LLM Agent 训练局数 | `20` |
+| `--eval-episodes` | Q-learning 训练后贪婪评估局数 | `100` |
+| `--checkpoint-interval` | 学习曲线采样间隔（每 N 局记录一次胜率/Q 表规模） | `1000` |
+| `--model` | LLM 模型名（也可用 `MOONSHOT_MODEL` 环境变量） | `kimi-k3` |
+| `--output` | 结果输出目录 | `results` |
+| `--seed` | 随机种子，用于复现 Q-learning 学习曲线 | 不固定 |
+| `--learning-rate` / `--discount` / `--epsilon-decay` / `--epsilon-min` | Q-learning 超参数 | `0.2 / 0.99 / 0.9995 / 0.1` |
+| `--stochastic` | 使用随机环境 | 确定性 |
+| `--skip-llm` | 兼容旧用法，等价于 `--mode qlearning` | — |
+
+#### Q-Learning Only (实验 7-1，离线，无需 API)
+
+```bash
+python experiment.py --mode qlearning --rl-episodes 10000 --seed 42
+```
+
+训练不到 3 秒即可完成，并打印**学习曲线表格**，直观展现智能体如何在近万局试错中从
+0% 胜率逐步学会通关（见下方"Experiment Results"）。
+
+#### Full Comparison (RL vs LLM，实验 7-2)
+
+```bash
+python experiment.py --mode both --model kimi-k3
 ```
 
 This will:
-1. Train a Q-learning agent for 5000 episodes (takes ~3 seconds)
+1. Train a Q-learning agent for 10000 episodes (takes ~3 seconds) and print its learning curve
 2. Train an LLM agent for 20 episodes with detailed reasoning display
 3. Evaluate both agents
 4. Generate comparison plots
 5. Save results to the `results/` directory
 
-**Note**: The LLM training shows the complete reasoning process for the first 3 episodes and the last episode, so you can see exactly how it learns!
+**Note**: The LLM training shows the complete reasoning process for the first 3 episodes and the last episode, so you can see exactly how it learns! Each LLM episode takes ~1-2 minutes (real API calls), matching the cost trade-off discussed in 实验 7-2.
 
-#### Custom Parameters
+#### LLM Only
 
 ```bash
-# Adjust episode counts
-python experiment.py --rl-episodes 10000 --llm-episodes 30
-
-# Show detailed training output
-python experiment.py --verbose
-
-# Run only RL experiment (if no API key)
-python experiment.py --skip-llm
+python experiment.py --mode llm --llm-episodes 20
 ```
 
 #### Interactive Game Play
@@ -176,22 +213,31 @@ The experiment creates comparison plots showing:
 
 ### Expected Results
 
-Based on "The Second Half" insights and our testing:
+#### Q-Learning learning curve (measured locally, `--mode qlearning --rl-episodes 10000 --seed 42`)
 
-- **Q-Learning**: 
-  - Needs ~7000-8000 episodes to achieve consistent victories
-  - 100% victory rate after 10,000 episodes
-  - Learns through trial and error, memorizing state-action pairs
-  
-- **LLM In-Context**: 
-  - Often solves the game within 5-10 episodes
-  - Achieves 50-80% victory rate with just 20 episodes
-  - Learns by reasoning about patterns and forming hypotheses
-  
-- **Sample Efficiency**: 
-  - LLM is **250-400x more sample efficient**
-  - LLM uses reasoning to generalize from few examples
-  - Q-learning requires exhaustive exploration
+实测学习曲线（确定性环境，胜率按最近 1000 局滑动窗口统计，整段训练约 3 秒）：
+
+| Episodes | Victory rate | Q-table states | epsilon |
+| ---: | ---: | ---: | ---: |
+| 1000 | 0.1% | 124 | 0.606 |
+| 2000 | 0.0% | 129 | 0.368 |
+| 3000 | 0.0% | 130 | 0.223 |
+| 5000 | 0.0% | 132 | 0.100 |
+| 7000 | 0.0% | 138 | 0.100 |
+| 8000 | 0.0% | 140 | 0.100 |
+| 9000 | 9.3% | 143 | 0.100 |
+| 10000 | **99.8%** | 143 | 0.100 |
+
+训练后贪婪评估（`--eval-episodes 100`）胜率为 **100%**，平均 15 步通关。这正是实验 7-1
+的核心现象：前 8000 局几乎 0% 胜率、只在盲目探索，价值信号需要近万局试错才传播到位。
+（因随机探索有方差，未固定 `--seed` 时各次运行的拐点会略有不同，但整体形态一致。）
+
+#### RL vs LLM（实验 7-2 的对比结论）
+
+- **Q-Learning**: 需要近 10000 局才达到稳定通关；把"门/钥匙/剑"当作无意义符号，只能靠统计式暴力探索。
+- **LLM In-Context**: 携带预训练先验，往往第一局就能在十几步内通关；靠推理理解游戏概念结构。
+- **Sample Efficiency**: LLM 的样本效率高出 2-3 个数量级；但单局推理慢（API 调用 ~1-2 分钟），
+  Q-learning 跑 10000 局只需约 3 秒——权衡取决于交互成本，详见书中实验 7-2。
 
 ## 🏗️ Project Structure
 
@@ -217,17 +263,21 @@ learning-from-experience/
 
 - **Algorithm**: Tabular Q-learning with ε-greedy exploration
 - **State Representation**: Hashed combination of room, inventory, and game state
-- **Learning Rate**: 0.1 (configurable)
-- **Discount Factor**: 0.95
-- **Exploration**: ε starts at 1.0, decays to 0.01
+- **Learning Rate**: 0.2 (configurable via `--learning-rate`)
+- **Discount Factor**: 0.99 (configurable via `--discount`)
+- **Exploration**: ε starts at 1.0, decays by `--epsilon-decay` (0.9995) to `--epsilon-min` (0.1)
 
-### LLM Agent (Kimi K2)
+### LLM Agent (Kimi K3)
 
-- **Model**: Moonshot-v1-auto (Kimi K2)
-- **Learning Method**: In-context learning with experience memory
+- **Model**: `kimi-k3` (Kimi K3; override with `--model` or `MOONSHOT_MODEL`)
+- **Reasoning model**: Kimi K3 emits a chain-of-thought (`message.reasoning_content`) before its
+  final answer (`message.content`), so the code uses a generous `max_tokens=2048` to make sure the
+  `ACTION:` line is not truncated by the reasoning budget.
+- **Learning Method**: In-context learning with experience memory (up to 50 experiences)
 - **Context Management**: Stores successful and failed experiences
 - **Reasoning**: Prompts LLM to reason about past experiences before acting
-- **Temperature**: 0.7 for balanced exploration/exploitation
+- **Temperature**: requested 0.7, but reasoning models (Kimi K3, GPT-5) only accept
+  `temperature=1`, so the code auto-forces `1` for those (see `_reasoning_safe_temperature`)
 
 ## 📈 Extending the Experiment
 

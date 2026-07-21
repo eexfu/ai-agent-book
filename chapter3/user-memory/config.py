@@ -11,6 +11,48 @@ from enum import Enum
 load_dotenv()
 
 
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
+def openrouter_model_id(model) -> str:
+    """Map a provider-native model name to an OpenRouter model id, used by the
+    universal OpenRouter fallback. An explicit OPENROUTER_MODEL env var wins."""
+    override = os.getenv("OPENROUTER_MODEL")
+    if override:
+        return override
+    m = (model or "").strip()
+    if not m:
+        return "openai/gpt-5.6-luna"
+    if "/" in m:
+        return m  # already an OpenRouter-style id (e.g. openai/gpt-5.6-luna)
+    ml = m.lower()
+    if ml.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return "openai/" + m
+    if ml.startswith("claude-"):
+        return "anthropic/claude-opus-4.8"
+    if ml.startswith("kimi"):
+        # kimi-k3 is not on OpenRouter; moonshotai/kimi-k2.6 is the closest hosted id.
+        return "moonshotai/kimi-k2.6"
+    # Provider-native ids (kimi-*/doubao-*/qwen/deepseek-*) not hosted on
+    # OpenRouter under the same name -> a widely-available OpenAI chat model.
+    return "openai/gpt-5.6-luna"
+
+
+# Default model per provider, used to map onto an OpenRouter model id when the
+# primary provider key is missing but OPENROUTER_API_KEY is present.
+PROVIDER_DEFAULT_MODELS = {
+    "siliconflow": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+    "doubao": "doubao-seed-1-6-thinking-250715",
+    "kimi": "kimi-k3",
+    "moonshot": "kimi-k3",
+}
+
+
 class MemoryMode(Enum):
     """Memory management modes"""
     NOTES = "notes"  # Simple notes/facts (basic)
@@ -135,7 +177,7 @@ class Config:
         os.makedirs(cls.MEMORY_STORAGE_DIR, exist_ok=True)
         os.makedirs(cls.CONVERSATION_HISTORY_DIR, exist_ok=True)
         os.makedirs(cls.LOCOMO_OUTPUT_DIR, exist_ok=True)
-        os.makedirs(os.path.dirname(cls.LOG_FILE) if cls.LOG_FILE else "logs", exist_ok=True)
+        os.makedirs(os.path.dirname(cls.LOG_FILE) or "logs", exist_ok=True)
     
     @classmethod
     def get_model_config(cls) -> Dict[str, Any]:
@@ -147,7 +189,7 @@ class Config:
         """
         return {
             "model": cls.MODEL_NAME,
-            "temperature": cls.MODEL_TEMPERATURE,
+            "temperature": _reasoning_safe_temperature(cls.MODEL_NAME, cls.MODEL_TEMPERATURE),
             "max_tokens": cls.MODEL_MAX_TOKENS
         }
     

@@ -95,7 +95,7 @@ async def test_basic_functionality():
     
     # Test with available model
     if api_keys["gemini"]:
-        model = "gemini-2.5-pro"
+        model = "gemini-3.5-flash"
         print(f"\n3. Testing with {model}:")
         print("-" * 40)
         
@@ -133,7 +133,7 @@ async def test_basic_functionality():
             print(f"Error: {e}")
     
     elif api_keys["openai"]:
-        model = "gpt-4o"
+        model = "gpt-5.6-luna"
         print(f"\n3. Testing with {model}:")
         print("-" * 40)
         
@@ -164,9 +164,9 @@ async def test_conversation_mode():
     
     # Use available model
     if config.gemini_api_key:
-        model = "gemini-2.5-pro"
+        model = "gemini-3.5-flash"
     else:
-        model = "gpt-4o"
+        model = "gpt-5.6-luna"
         
     agent = MultimodalAgent(
         model=model,

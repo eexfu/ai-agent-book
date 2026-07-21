@@ -17,6 +17,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
+
 class ToolType(Enum):
     """Enum for GPT-5 native tool types"""
     WEB_SEARCH = "web_search"
@@ -49,7 +57,7 @@ class GPT5NativeAgent:
         self, 
         api_key: str, 
         base_url: str = "https://openrouter.ai/api/v1",
-        model: str = "openai/gpt-5-2025-08-07"
+        model: str = "openai/gpt-5.6-sol"
     ):
         """
         Initialize the GPT-5 agent with OpenRouter API
@@ -57,7 +65,7 @@ class GPT5NativeAgent:
         Args:
             api_key: OpenRouter API key
             base_url: OpenRouter API base URL
-            model: Model identifier (default: openai/gpt-5-2025-08-07)
+            model: Model identifier (default: openai/gpt-5.6-sol)
         """
         self.api_key = api_key
         self.base_url = base_url
@@ -97,17 +105,21 @@ Remember: These are native tools built into your capabilities, use them naturall
         messages: List[Dict[str, Any]],
         use_tools: bool = True,
         reasoning_effort: str = "low",
-        stream: bool = False
+        stream: bool = False,
+        verbosity: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Build the OpenRouter-specific request format matching the Go implementation
-        
+
         Args:
             messages: Conversation messages
             use_tools: Whether to enable tools
             reasoning_effort: Reasoning effort level (low, medium, high)
             stream: Whether to stream the response
-            
+            verbosity: Output verbosity level (low, medium, high). GPT-5's native
+                parameter controlling how detailed the answer is. None keeps the
+                model default.
+
         Returns:
             Request dictionary
         """
@@ -141,9 +153,13 @@ Remember: These are native tools built into your capabilities, use them naturall
             "effort": reasoning_effort,
             "generate_summary": False
         }
-        
+
+        # Add verbosity configuration (GPT-5 native parameter, only when set)
+        if verbosity:
+            request["verbosity"] = verbosity
+
         request["background"] = False
-        
+
         return request
     
     def process_request(
@@ -153,11 +169,13 @@ Remember: These are native tools built into your capabilities, use them naturall
         tool_choice: Literal["auto", "none", "required"] = "auto",
         temperature: float = 0.3,
         max_tokens: Optional[int] = None,
-        reasoning_effort: str = "low"
+        reasoning_effort: str = "low",
+        verbosity: Optional[str] = None,
+        dry_run: bool = False
     ) -> Dict[str, Any]:
         """
         Process a user request with optional tool usage (OpenRouter format)
-        
+
         Args:
             user_request: The user's request or question
             use_tools: Whether to enable native tools
@@ -165,7 +183,10 @@ Remember: These are native tools built into your capabilities, use them naturall
             temperature: Response temperature (0-1)
             max_tokens: Maximum tokens in response
             reasoning_effort: Reasoning effort level (low, medium, high)
-            
+            verbosity: Output verbosity level (low, medium, high); None keeps default
+            dry_run: If True, build and return the request body WITHOUT calling the
+                API. Useful for inspecting the native-tool request offline.
+
         Returns:
             Dictionary containing the response and metadata
         """
@@ -191,16 +212,29 @@ Remember: These are native tools built into your capabilities, use them naturall
                 messages=self.conversation_history,
                 use_tools=use_tools,
                 reasoning_effort=reasoning_effort,
-                stream=False
+                stream=False,
+                verbosity=verbosity
             )
-            
+
             # Add temperature and max_tokens if specified
             if temperature is not None:
-                request_body["temperature"] = temperature
+                request_body["temperature"] = _reasoning_safe_temperature(self.model, temperature)
             if max_tokens:
                 request_body["max_tokens"] = max_tokens
-            
+
             logger.info(f"Request body: {json.dumps(request_body, indent=2)}")
+
+            # Dry-run: return the assembled request without hitting the network
+            if dry_run:
+                logger.info("Dry-run mode: returning request body without calling the API")
+                return {
+                    "success": True,
+                    "dry_run": True,
+                    "response": None,
+                    "request": request_body,
+                    "tool_calls": [],
+                    "model": self.model
+                }
             
             # Make the API call directly using requests (matching Go implementation)
             headers = {

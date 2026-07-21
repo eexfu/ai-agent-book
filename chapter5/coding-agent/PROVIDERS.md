@@ -10,11 +10,11 @@ The Coding Agent supports three providers: Anthropic, OpenAI, and OpenRouter. Ea
 # .env
 PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-api03-...
-DEFAULT_MODEL=claude-sonnet-4-20250514
+DEFAULT_MODEL=claude-sonnet-5
 ```
 
 **Available Models:**
-- `claude-sonnet-4-20250514` (Latest Sonnet 4, recommended)
+- `claude-sonnet-5` (Latest Sonnet 4, recommended)
 - `claude-3-5-sonnet-20241022` (Sonnet 3.5)
 - `claude-3-opus-20240229` (Opus 3)
 - `claude-3-haiku-20240307` (Haiku 3, faster/cheaper)
@@ -51,14 +51,12 @@ DEFAULT_MODEL=anthropic/claude-sonnet-4
 # .env
 PROVIDER=openai
 OPENAI_API_KEY=sk-...
-DEFAULT_MODEL=gpt-4-turbo
+DEFAULT_MODEL=gpt-5.6-luna
 ```
 
 **Available Models:**
-- `gpt-4-turbo` (GPT-4 Turbo)
-- `gpt-4` (GPT-4)
-- `gpt-4o` (GPT-4 Omni)
-- `gpt-3.5-turbo` (GPT-3.5, faster/cheaper)
+- `gpt-5.6-sol` (flagship, strongest reasoning)
+- `gpt-5.6-luna` (fast / cheaper, default)
 
 **Get API Key:** https://platform.openai.com/
 
@@ -134,7 +132,7 @@ from agent import CodingAgent
 # Test Anthropic
 agent1 = CodingAgent(
     api_key="sk-ant-...",
-    model="claude-sonnet-4-20250514",
+    model="claude-sonnet-5",
     provider="anthropic"
 )
 
@@ -174,10 +172,10 @@ Different models may support different parameters:
 
 ```python
 # Anthropic: Use thinking mode
-DEFAULT_MODEL=claude-sonnet-4-20250514
+DEFAULT_MODEL=claude-sonnet-5
 
 # OpenAI: Use newer models
-DEFAULT_MODEL=gpt-4-turbo-2024-04-09
+DEFAULT_MODEL=gpt-5.6-luna-2024-04-09
 
 # OpenRouter: Access any provider
 DEFAULT_MODEL=google/gemini-pro-1.5

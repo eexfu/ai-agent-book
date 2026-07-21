@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script for Kimi K2 model integration
-Tests the Kimi K2 model (kimi-k2-0905-preview) with various tasks
+Test script for Kimi K3 model integration
+Tests the Kimi K3 model (kimi-k3) with various tasks
 """
 
 import os
@@ -188,9 +188,9 @@ def test_model_info():
 def main():
     """Run all tests"""
     print("\n" + "="*60)
-    print("KIMI K2 MODEL INTEGRATION TEST SUITE")
+    print("KIMI K3 MODEL INTEGRATION TEST SUITE")
     print("="*60)
-    print("\nModel: kimi-k2-0905-preview")
+    print("\nModel: kimi-k3")
     print("Provider: Moonshot AI")
     print("API: https://api.moonshot.cn/v1")
     
@@ -232,7 +232,7 @@ def main():
     print(f"\nTotal: {passed}/{total} tests passed")
     
     if passed == total:
-        print("\n🎉 All tests passed! Kimi K2 integration is working correctly.")
+        print("\n🎉 All tests passed! Kimi K3 integration is working correctly.")
     else:
         print(f"\n⚠️  {total - passed} test(s) failed. Please check the errors above.")
     

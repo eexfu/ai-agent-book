@@ -175,7 +175,8 @@ def filter_data(df: pd.DataFrame,
     if 'turn' in filtered.columns:
         filtered = filtered[filtered['turn'] >= min_turn]
     
-    print(f"After filtering: {len(filtered)} records ({len(filtered)/len(df)*100:.1f}% of original)")
+    pct = (len(filtered) / len(df) * 100) if len(df) else 0.0
+    print(f"After filtering: {len(filtered)} records ({pct:.1f}% of original)")
     return filtered.reset_index(drop=True)
 
 

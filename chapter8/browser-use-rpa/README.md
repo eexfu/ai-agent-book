@@ -58,7 +58,7 @@ pip install -r requirements.txt
 playwright install chromium
 
 # 3. 配置环境变量
-cp .env.example .env
+cp env.example .env
 # 编辑.env文件，添加你的API密钥
 ```
 
@@ -67,13 +67,13 @@ cp .env.example .env
 ### 基本用法
 
 ```python
-from browser_use import ChatOpenAI
 from learning_agent import LearningAgent
+from llm_factory import make_llm  # 包装层 LLM 工厂：OpenAI 直连，缺 Key 时 OpenRouter 兜底
 
 # 创建学习Agent
 agent = LearningAgent(
     task="发送邮件给test@example.com，主题是'测试'，内容是'这是一封测试邮件'",
-    llm=ChatOpenAI(model="gpt-4o-mini"),
+    llm=make_llm(),  # 默认 gpt-5.6-luna；无 OPENAI_API_KEY 时走 OpenRouter 兜底
     knowledge_base_path="./knowledge_base",
     headless=False  # 显示浏览器界面
 )
@@ -88,16 +88,49 @@ print(f"是否使用已学习的工作流: {result['replay_used']}")
 
 ### 运行演示
 
-```bash
-# 天气查询演示
-python demo_weather.py
+`demo_email.py` 是本实验的主入口，演示「学习一次工作流 → 用不同参数高速回放」这一核心思想。
+它提供了完整的中文命令行接口，运行 `python demo_email.py --help` 可查看所有参数：
 
-# 邮件发送演示（完整流程）
+```bash
+# 运行完整的「学习 → 回放」对比演示（默认行为，会打开浏览器）
 python demo_email.py
 
-# 快速测试
+# 快速冒烟测试：只跑一次简单任务，不做学习/回放对比
 python demo_email.py --quick
+
+# 无界面模式 + 使用 Gemini 模型
+python demo_email.py --model gemini-2.0-flash-exp --headless
+
+# 自定义两个阶段的任务，并把指标对比写入 JSON 文件
+python demo_email.py \
+    --task '给 a@b.com 发主题为"报告"的邮件' \
+    --replay-task '给 c@d.com 发主题为"周报"的邮件' \
+    --output results.json
+
+# 天气查询演示（另一个更轻量的例子）
+python demo_weather.py
 ```
+
+**命令行参数说明（`demo_email.py`）：**
+
+| 参数 | 说明 | 默认值 |
+|-----|------|-------|
+| `--task` | 学习阶段的任务描述 | 向 test@example.com 发送测试邮件 |
+| `--replay-task` | 回放阶段的任务描述（参数不同、流程相同） | 向 another@example.com 发送邮件 |
+| `--model` | 大模型；`gpt-*` 走 OpenAI（缺 Key 时 OpenRouter 兜底），`gemini-*` 走 Google | `gpt-5.6-luna` |
+| `--headless` | 以无界面模式运行浏览器 | 显示窗口 |
+| `--knowledge-base` | 工作流知识库存储目录 | `./email_knowledge` |
+| `--max-steps` | 学习阶段最大操作步数 | `20` |
+| `--output` | 把学习/回放指标与知识库统计写入 JSON 文件 | 不写出 |
+| `--quick` | 快速冒烟测试模式 | 关闭 |
+
+**预期结果：** 第一次运行时，Agent 处于学习阶段，会通过多模态大模型逐步探索并录制「发送邮件」工作流，
+耗时较长且产生多次 LLM 调用；随后回放阶段用新的收件人/主题参数复用同一工作流，几乎不再调用大模型，
+耗时显著下降。演示结束会打印两个阶段的耗时、LLM 调用次数与知识库统计；若指定了 `--output`，
+上述对比会以结构化 JSON 保存，便于复盘“学习一次、复用多次”带来的成本收益。
+
+> 注意：完整运行需要有效的模型 API Key（见 `.env`）以及本地可用的浏览器（`playwright install chromium`）。
+> `--help` 与参数解析本身无需上述依赖即可查看。
 
 ## 验收标准测试
 

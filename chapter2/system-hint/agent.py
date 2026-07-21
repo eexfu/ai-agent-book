@@ -21,6 +21,14 @@ import tempfile
 import shutil
 from pathlib import Path
 
+
+def _reasoning_safe_temperature(model, requested=1.0):
+    """Reasoning models (Kimi K3, GPT-5, ...) only accept temperature=1.
+    Return 1 for those; otherwise the requested value so non-reasoning
+    providers (Doubao, DeepSeek, older Moonshot) are unchanged."""
+    m = str(model or "").lower().replace("/", "-")
+    return 1 if ("kimi-k3" in m or "gpt-5" in m) else requested
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -83,7 +91,7 @@ class SystemHintAgent:
         
         Args:
             api_key: API key for the LLM provider
-            provider: LLM provider ('kimi' for Kimi K2)
+            provider: LLM provider ('kimi' for Kimi K3)
             model: Optional model override
             config: System hint configuration
             verbose: If True, log full details
@@ -94,11 +102,24 @@ class SystemHintAgent:
         
         # Configure client based on provider
         if self.provider == "kimi" or self.provider == "moonshot":
+            # 默认 Moonshot/Kimi 官方端点；若传入 OpenRouter key（sk-or-…）则自动
+            # 回退到 OpenRouter，并把 kimi-* 映射为 moonshotai/kimi-k2。
+            from openrouter_fallback import (
+                OPENROUTER_BASE_URL,
+                is_openrouter_key,
+                map_model_to_openrouter,
+            )
+            resolved_model = model or "kimi-k3"
+            if is_openrouter_key(api_key):
+                base_url = OPENROUTER_BASE_URL
+                resolved_model = map_model_to_openrouter(resolved_model)
+            else:
+                base_url = "https://api.moonshot.cn/v1"
             self.client = OpenAI(
                 api_key=api_key,
-                base_url="https://api.moonshot.cn/v1"
+                base_url=base_url
             )
-            self.model = model or "kimi-k2-0905-preview"
+            self.model = resolved_model
         else:
             raise ValueError(f"Unsupported provider: {provider}")
         
@@ -818,23 +839,33 @@ Important: When you have completed all tasks, clearly state "FINAL ANSWER:" foll
                     messages=messages_to_send,
                     tools=self._get_tools_description(),
                     tool_choice="auto",
-                    temperature=0.3,
+                    temperature=_reasoning_safe_temperature(self.model, 0.3),
                     max_tokens=8192
                 )
                 
                 message = response.choices[0].message
-                
-                # Check for final answer
-                if message.content and "FINAL ANSWER:" in message.content:
-                    final_answer = message.content.split("FINAL ANSWER:")[1].strip()
-                    logger.info(f"Final answer found: {final_answer[:100]}...")
+                has_tool_calls = bool(getattr(message, "tool_calls", None))
+
+                # Terminal path: a text reply with no tool calls ends the loop,
+                # even without the FINAL ANSWER: marker (e.g. a plain "hi"
+                # reply). Previously only "FINAL ANSWER:" broke the loop, so
+                # plain replies were re-sent for up to max_iterations.
+                if not has_tool_calls:
                     self.conversation_history.append(message.model_dump())
+                    content = (message.content or "").strip()
+                    if content:
+                        final_answer = (content.split("FINAL ANSWER:", 1)[1].strip()
+                                        if "FINAL ANSWER:" in content else content)
+                        logger.info(f"Terminal text response (no tool calls); final answer: {final_answer[:100]}...")
+                    else:
+                        logger.warning("Empty model response with no tool calls; "
+                                       "stopping to avoid burning remaining iterations")
                     # Save final trajectory
                     self._save_trajectory(iteration, final_answer)
                     break
-                
+
                 # Handle tool calls
-                if hasattr(message, 'tool_calls') and message.tool_calls:
+                if has_tool_calls:
                     self.conversation_history.append(message.model_dump())
                     
                     for tool_call in message.tool_calls:
@@ -925,10 +956,14 @@ Important: When you have completed all tasks, clearly state "FINAL ANSWER:" foll
                             "tool_call_id": tool_call.id,
                             "content": tool_content
                         })
-                    
-                elif message.content:
-                    # Regular assistant message
-                    self.conversation_history.append(message.model_dump())
+
+                    # If the same turn also tagged FINAL ANSWER: (unusual with
+                    # tool calls), still stop after recording the tool results.
+                    if message.content and "FINAL ANSWER:" in message.content:
+                        final_answer = message.content.split("FINAL ANSWER:", 1)[1].strip()
+                        logger.info(f"Final answer found alongside tool calls: {final_answer[:100]}...")
+                        self._save_trajectory(iteration, final_answer)
+                        break
                     
             except Exception as e:
                 logger.error(f"Error during task execution: {str(e)}")

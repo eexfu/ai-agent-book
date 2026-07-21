@@ -6,7 +6,7 @@ A comprehensive evaluation framework for testing AI agent memory systems across 
 ## Implementation Status
 
 ### ✅ Framework Core (100% Complete)
-- **Evaluation Engine**: LLM-as-judge using Kimi K2 or OpenAI
+- **Evaluation Engine**: LLM-as-judge using Kimi K3 or OpenAI
 - **Test Case Models**: Full Pydantic models for validation
 - **Framework Interface**: Complete API for test case management
 - **Interactive CLI**: User-friendly interface for testing

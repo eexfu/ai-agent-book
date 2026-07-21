@@ -96,7 +96,7 @@ def main():
     # Menu
     print("\n📋 What would you like to do?")
     print("1. Run quick test (Context-Aware Citations)")
-    print("2. Run full experiment (all 5 strategies)")
+    print("2. Run full experiment (all 6 strategies)")
     print("3. Interactive demo (choose strategy)")
     print("4. Exit")
     
@@ -111,7 +111,7 @@ def main():
             experiment.main()
         elif choice == "3":
             print("\n🎮 Starting interactive demo...")
-            import demo
+            import main as demo
             demo.main()
         elif choice == "4":
             print("\n👋 Goodbye!")

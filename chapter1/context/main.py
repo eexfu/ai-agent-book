@@ -27,6 +27,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load .env so API keys configured there are available via os.getenv.
+# (config.py calls load_dotenv() too, but main.py only imports agent, which
+#  does not import config, so we must trigger it here.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 class AblationTestSuite:
     """Test suite for exploring context importance through ablation studies"""
@@ -91,32 +100,35 @@ Tasks to complete:
 
 Present a detailed financial analysis with all conversions and calculations."""
     
-    def run_single_test(self, task: str, context_mode: ContextMode, test_name: str) -> Dict[str, Any]:
+    def run_single_test(self, task: str, context_mode: ContextMode, test_name: str,
+                        case_name: str = "default") -> Dict[str, Any]:
         """
         Run a single ablation test
-        
+
         Args:
             task: Task to execute
             context_mode: Context mode to test
             test_name: Name of the test
-            
+            case_name: Name of the case/task this test belongs to
+
         Returns:
             Test results
         """
         logger.info(f"\n{'='*60}")
-        logger.info(f"Running test: {test_name}")
+        logger.info(f"Running test: {test_name} [case: {case_name}]")
         logger.info(f"Context mode: {context_mode.value}")
         logger.info(f"{'='*60}")
-        
+
         agent = ContextAwareAgent(self.api_key, context_mode, provider=self.provider, model=self.model)
-        
+
         start_time = time.time()
         result = agent.execute_task(task)
         execution_time = time.time() - start_time
-        
+
         # Analyze the result
         test_result = {
             "test_name": test_name,
+            "case_name": case_name,
             "context_mode": context_mode.value,
             "execution_time": round(execution_time, 2),
             "iterations": result.get("iterations", 0),
@@ -139,58 +151,63 @@ Present a detailed financial analysis with all conversions and calculations."""
         
         return test_result
     
-    def run_ablation_study(self, context_modes: List[ContextMode] = None) -> List[Dict[str, Any]]:
+    def run_ablation_study(self, context_modes: List[ContextMode] = None,
+                          cases: List[Dict[str, str]] = None) -> List[Dict[str, Any]]:
         """
-        Run ablation study across specified context modes
-        
+        Run ablation study across specified context modes and one or more cases.
+
         Args:
             context_modes: List of context modes to test (defaults to all modes)
-        
+            cases: List of {"name", "task"} dicts to run each mode against.
+                   Defaults to a single multinational-budget case, which
+                   preserves the original single-task behaviour.
+
         Returns:
-            List of test results
+            Flat list of test results (one entry per case x mode).
         """
-        # Use the complex financial task for all tests
-        task = self.create_multinational_budget_task()
-        
-        # Define test configurations
+        # Default: single multinational-budget case (preserves prior behaviour).
+        if cases is None:
+            cases = [{
+                "name": "Multinational Budget",
+                "task": self.create_multinational_budget_task()
+            }]
+
+        # Map context modes to test names
+        mode_names = {
+            ContextMode.FULL: "Baseline - Full Context",
+            ContextMode.NO_HISTORY: "Ablation 1 - No Historical Tool Calls",
+            ContextMode.NO_REASONING: "Ablation 2 - No Reasoning Process",
+            ContextMode.NO_TOOL_CALLS: "Ablation 3 - No Tool Call Commands",
+            ContextMode.NO_TOOL_RESULTS: "Ablation 4 - No Tool Call Results"
+        }
+
         if context_modes is None:
-            test_configs = [
-                (ContextMode.FULL, "Baseline - Full Context"),
-                (ContextMode.NO_HISTORY, "Ablation 1 - No Historical Tool Calls"),
-                (ContextMode.NO_REASONING, "Ablation 2 - No Reasoning Process"),
-                (ContextMode.NO_TOOL_CALLS, "Ablation 3 - No Tool Call Commands"),
-                (ContextMode.NO_TOOL_RESULTS, "Ablation 4 - No Tool Call Results")
-            ]
-        else:
-            # Map context modes to test names
-            mode_names = {
-                ContextMode.FULL: "Baseline - Full Context",
-                ContextMode.NO_HISTORY: "Ablation 1 - No Historical Tool Calls",
-                ContextMode.NO_REASONING: "Ablation 2 - No Reasoning Process",
-                ContextMode.NO_TOOL_CALLS: "Ablation 3 - No Tool Call Commands",
-                ContextMode.NO_TOOL_RESULTS: "Ablation 4 - No Tool Call Results"
-            }
-            test_configs = [(mode, mode_names[mode]) for mode in context_modes]
-        
+            context_modes = list(mode_names.keys())
+
         results = []
-        for context_mode, test_name in test_configs:
-            try:
-                result = self.run_single_test(task, context_mode, test_name)
-                results.append(result)
-                self.test_results.append(result)
-                
-                # Add delay between tests to avoid rate limiting
-                time.sleep(2)
-                
-            except Exception as e:
-                logger.error(f"Failed to run test {test_name}: {str(e)}")
-                results.append({
-                    "test_name": test_name,
-                    "context_mode": context_mode.value,
-                    "error": str(e),
-                    "success": False
-                })
-        
+        for case in cases:
+            case_name = case["name"]
+            task = case["task"]
+            for context_mode in context_modes:
+                test_name = mode_names[context_mode]
+                try:
+                    result = self.run_single_test(task, context_mode, test_name, case_name=case_name)
+                    results.append(result)
+                    self.test_results.append(result)
+
+                    # Add delay between tests to avoid rate limiting
+                    time.sleep(2)
+
+                except Exception as e:
+                    logger.error(f"Failed to run test {test_name} [case: {case_name}]: {str(e)}")
+                    results.append({
+                        "test_name": test_name,
+                        "case_name": case_name,
+                        "context_mode": context_mode.value,
+                        "error": str(e),
+                        "success": False
+                    })
+
         return results
     
     def analyze_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -249,7 +266,7 @@ Present a detailed financial analysis with all conversions and calculations."""
         table_data = []
         for result in results:
             table_data.append([
-                result["test_name"],
+                result.get("case_name", "default"),
                 result["context_mode"],
                 "✓" if result.get("success", False) else "✗",
                 f"{result.get('execution_time', 0)}s",
@@ -258,11 +275,53 @@ Present a detailed financial analysis with all conversions and calculations."""
                 result.get("reasoning_steps", 0),
                 "Yes" if result.get("has_final_answer", False) else "No"
             ])
-        
-        headers = ["Test Name", "Context Mode", "Success", "Time", "Iterations", "Tool Calls", "Reasoning Steps", "Final Answer"]
-        
+
+        headers = ["Case", "Context Mode", "Success", "Time", "Iterations", "Tool Calls", "Reasoning Steps", "Final Answer"]
+
         print("\n" + "="*80)
         print("ABLATION STUDY RESULTS")
+        print("="*80)
+        print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+    def print_comparison_matrix(self, results: List[Dict[str, Any]]):
+        """
+        Print a mode x case comparison matrix so the effect of each context
+        component can be read at a glance across every case.
+
+        Args:
+            results: List of test results
+        """
+        cases = []
+        for r in results:
+            c = r.get("case_name", "default")
+            if c not in cases:
+                cases.append(c)
+
+        modes = []
+        for r in results:
+            m = r["context_mode"]
+            if m not in modes:
+                modes.append(m)
+
+        # Index results by (mode, case) for quick lookup.
+        by_key = {(r["context_mode"], r.get("case_name", "default")): r for r in results}
+
+        table_data = []
+        for mode in modes:
+            row = [mode]
+            for case in cases:
+                r = by_key.get((mode, case))
+                if r is None:
+                    row.append("-")
+                elif r.get("success", False):
+                    row.append(f"✓ {r.get('iterations', 0)}it/{r.get('num_tool_calls', 0)}tc")
+                else:
+                    row.append(f"✗ {r.get('iterations', 0)}it/{r.get('num_tool_calls', 0)}tc")
+            table_data.append(row)
+
+        headers = ["Context Mode"] + cases
+        print("\n" + "="*80)
+        print("COMPARISON MATRIX (rows = context mode, cols = case; cell = success it=iterations tc=tool calls)")
         print("="*80)
         print(tabulate(table_data, headers=headers, tablefmt="grid"))
     
@@ -413,16 +472,17 @@ The ablation study clearly demonstrates that each context component plays a vita
         return report
 
 
-def run_single_task(api_key: str, task: str, context_mode: str = "full", provider: str = "siliconflow", model: str = None):
+def run_single_task(api_key: str, task: str, context_mode: str = "full", provider: str = "siliconflow", model: str = None, output: str = None):
     """
     Run a single task with the agent
-    
+
     Args:
         api_key: API key for the LLM provider
         task: Task description
         context_mode: Context mode to use
         provider: LLM provider to use
         model: Optional model override
+        output: Optional path for the JSON result (default task_result_{mode}.json)
     """
     # Parse context mode
     mode_map = {
@@ -465,7 +525,7 @@ def run_single_task(api_key: str, task: str, context_mode: str = "full", provide
         print(f"\nError: {result['error']}")
     
     # Save detailed results
-    output_file = f"task_result_{context_mode}.json"
+    output_file = output or f"task_result_{context_mode}.json"
     with open(output_file, 'w') as f:
         # Convert trajectory to serializable format
         serializable_result = {
@@ -604,15 +664,42 @@ Calculate:
     ]
 
 
-def run_ablation_study(api_key: str, provider: str = "siliconflow", model: str = None, context_modes: List[str] = None):
+def get_ablation_cases(num_cases: int = 1) -> List[Dict[str, str]]:
+    """
+    Build a list of self-contained cases for the ablation study.
+
+    Reuses the pre-defined sample tasks, skipping the PDF task (which needs
+    network access) so the study is reproducible offline apart from the LLM
+    call itself. num_cases=1 returns a single case; larger values add more.
+
+    Args:
+        num_cases: How many cases to include (clamped to [1, available]).
+
+    Returns:
+        List of {"name", "task"} dicts.
+    """
+    samples = get_sample_tasks()
+    # Indices 0/2/3/4 are currency/finance tasks (index 1 is the PDF task).
+    candidates = [samples[0], samples[2], samples[3], samples[4]]
+    num_cases = max(1, min(num_cases, len(candidates)))
+    return [{"name": c["name"], "task": c["task"]} for c in candidates[:num_cases]]
+
+
+def run_ablation_study(api_key: str, provider: str = "siliconflow", model: str = None,
+                       context_modes: List[str] = None, num_cases: int = 1,
+                       output: str = None):
     """
     Run ablation study to test importance of context
-    
+
     Args:
         api_key: API key for the LLM provider
         provider: LLM provider to use
         model: Optional model override
         context_modes: List of context mode names to test (defaults to all)
+        num_cases: Number of cases to run each mode against. 1 (default) keeps
+            the original single multinational-budget task; >1 runs a multi-case
+            comparison across the sample tasks.
+        output: Optional path for the raw JSON results (default ablation_results.json)
     """
     # Parse context modes if provided
     mode_map = {
@@ -622,7 +709,7 @@ def run_ablation_study(api_key: str, provider: str = "siliconflow", model: str =
         "no_tool_calls": ContextMode.NO_TOOL_CALLS,
         "no_tool_results": ContextMode.NO_TOOL_RESULTS
     }
-    
+
     modes_to_test = None
     if context_modes:
         modes_to_test = []
@@ -633,39 +720,49 @@ def run_ablation_study(api_key: str, provider: str = "siliconflow", model: str =
                 logger.error(f"Invalid context mode: {mode_name}")
                 logger.info(f"Valid modes: {', '.join(mode_map.keys())}")
                 return
-    
+
+    # Build cases. num_cases <= 1 keeps the original single-case behaviour.
+    cases = None
+    if num_cases and num_cases > 1:
+        cases = get_ablation_cases(num_cases)
+
     test_suite = AblationTestSuite(api_key, provider=provider, model=model)
-    
+
     logger.info("Starting ablation study...")
     if modes_to_test:
         logger.info(f"Testing modes: {', '.join(context_modes)}")
     else:
         logger.info("Testing all context modes")
-    
-    results = test_suite.run_ablation_study(modes_to_test)
-    
+    logger.info(f"Cases: {len(cases) if cases else 1}")
+
+    results = test_suite.run_ablation_study(modes_to_test, cases=cases)
+
     # Analyze results
     analysis = test_suite.analyze_results(results)
-    
+
     # Print results table
     test_suite.print_results_table(results)
-    
+
+    # Print mode x case comparison matrix
+    test_suite.print_comparison_matrix(results)
+
     # Generate visualizations
     try:
         test_suite.visualize_results(results)
     except Exception as e:
         logger.warning(f"Could not generate visualizations: {str(e)}")
-    
+
     # Generate and save report
     report = test_suite.generate_report(results, analysis)
     with open("ablation_study_report.md", "w") as f:
         f.write(report)
     logger.info("Report saved as 'ablation_study_report.md'")
-    
+
     # Save raw results
-    with open("ablation_results.json", "w") as f:
+    output_file = output or "ablation_results.json"
+    with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
-    logger.info("Raw results saved as 'ablation_results.json'")
+    logger.info(f"Raw results saved as '{output_file}'")
     
     # Print analysis summary
     print("\n" + "="*80)
@@ -698,7 +795,7 @@ def interactive_mode(api_key: str, provider: str = "siliconflow", model: str = N
     current_api_key = api_key
     
     # Available providers
-    available_providers = ["siliconflow", "doubao", "kimi", "moonshot"]
+    available_providers = ["siliconflow", "doubao", "kimi", "moonshot", "deepseek"]
     
     print("\n" + "="*60)
     print("INTERACTIVE MODE - Context-Aware Agent")
@@ -822,7 +919,9 @@ def interactive_mode(api_key: str, provider: str = "siliconflow", model: str = N
                     elif p == "doubao":
                         print(f"  - doubao: ByteDance model{status}")
                     elif p in ["kimi", "moonshot"]:
-                        print(f"  - {p}: Moonshot Kimi K2 model{status}")
+                        print(f"  - {p}: Moonshot Kimi K3 model{status}")
+                    elif p == "deepseek":
+                        print(f"  - deepseek: DeepSeek V4 model{status}")
             
             elif user_input.lower().startswith('provider '):
                 new_provider = user_input[9:].strip().lower()
@@ -842,6 +941,11 @@ def interactive_mode(api_key: str, provider: str = "siliconflow", model: str = N
                         new_api_key = os.getenv("MOONSHOT_API_KEY")
                         if not new_api_key:
                             print("❌ MOONSHOT_API_KEY not set in environment")
+                            continue
+                    elif new_provider == "deepseek":
+                        new_api_key = os.getenv("DEEPSEEK_API_KEY")
+                        if not new_api_key:
+                            print("❌ DEEPSEEK_API_KEY not set in environment")
                             continue
                     
                     # Update current settings
@@ -901,6 +1005,9 @@ def interactive_mode(api_key: str, provider: str = "siliconflow", model: str = N
                 elif current_provider in ["kimi", "moonshot"]:
                     key_status = "✅ Set" if os.getenv("MOONSHOT_API_KEY") else "❌ Not set"
                     print(f"  API Key (MOONSHOT_API_KEY): {key_status}")
+                elif current_provider == "deepseek":
+                    key_status = "✅ Set" if os.getenv("DEEPSEEK_API_KEY") else "❌ Not set"
+                    print(f"  API Key (DEEPSEEK_API_KEY): {key_status}")
             
             elif user_input:
                 # Execute task
@@ -927,70 +1034,114 @@ def interactive_mode(api_key: str, provider: str = "siliconflow", model: str = N
 
 def main():
     """Main function"""
-    parser = argparse.ArgumentParser(description="Context-Aware AI Agent")
+    parser = argparse.ArgumentParser(
+        description="上下文感知 AI Agent（第一章 实验 1.1：上下文消融实验）",
+        epilog="""示例：
+  # 交互模式（默认）
+  python main.py
+
+  # 运行完整消融实验（五种上下文模式对照）
+  python main.py --mode ablation
+
+  # 多案例消融对照，输出结果到指定文件
+  python main.py --mode ablation --cases 3 --output my_ablation.json
+
+  # 只对比“完整上下文”与“无历史消息”两种模式
+  python main.py --mode ablation --ablation-modes full no_history
+
+  # 单任务执行，指定上下文模式与提供商
+  python main.py --mode single --task "把 1000 美元换算成欧元、英镑、日元并求平均值" \\
+      --context-mode full --provider doubao
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--mode",
         choices=["single", "ablation", "interactive"],
         default="interactive",
-        help="Execution mode"
+        help="运行模式：single=单任务，ablation=消融实验，interactive=交互式（默认）"
     )
     parser.add_argument(
         "--task",
         type=str,
-        help="Task to execute (for single mode)"
+        help="要执行的任务/问题（用于 single 模式；不提供则从示例任务中选择）"
     )
     parser.add_argument(
         "--context-mode",
         choices=["full", "no_history", "no_reasoning", "no_tool_calls", "no_tool_results"],
         default="full",
-        help="Context mode for single task execution"
+        help="single 模式下的上下文模式：full=完整；no_history=无历史消息；"
+             "no_reasoning=无思考过程；no_tool_calls=无工具定义；no_tool_results=无工具执行结果"
     )
     parser.add_argument(
         "--ablation-modes",
         nargs="+",
         choices=["full", "no_history", "no_reasoning", "no_tool_calls", "no_tool_results"],
-        help="Specific context modes to test in ablation study (defaults to all)"
+        help="消融实验中要测试的上下文模式（默认测试全部五种）"
+    )
+    parser.add_argument(
+        "--cases",
+        type=int,
+        default=1,
+        help="消融实验运行的案例数量（默认 1；>1 时在多个示例任务上做跨模式对照）"
     )
     parser.add_argument(
         "--provider",
-        choices=["siliconflow", "doubao", "kimi", "moonshot"],
+        choices=["siliconflow", "doubao", "kimi", "moonshot", "deepseek", "openrouter"],
         default="doubao",
-        help="LLM provider to use (default: doubao)"
+        help="LLM 提供商（默认：doubao；openrouter 或缺失主 key 时经 OpenRouter 兜底）"
     )
     parser.add_argument(
         "--model",
         type=str,
-        help="Model to use (optional, uses provider default if not specified)"
+        help="使用的模型名称（可选，不指定则使用该提供商的默认模型）"
     )
     parser.add_argument(
         "--api-key",
         type=str,
-        help="API key for the LLM provider (or set SILICONFLOW_API_KEY/ARK_API_KEY/MOONSHOT_API_KEY env var)"
+        help="LLM 提供商的 API Key（也可通过环境变量 SILICONFLOW_API_KEY/ARK_API_KEY/MOONSHOT_API_KEY/DEEPSEEK_API_KEY 设置）"
     )
-    
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="结果输出文件路径（single 模式为 JSON 结果，ablation 模式为原始结果 JSON）"
+    )
+
     args = parser.parse_args()
     
-    # Get API key based on provider
+    # Get API key based on provider (with universal OpenRouter fallback)
     if args.api_key:
         api_key = args.api_key
+    elif args.provider == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY")
     elif args.provider == "doubao":
         api_key = os.getenv("ARK_API_KEY")
-        if not api_key:
-            logger.error("Please provide API key via --api-key or ARK_API_KEY environment variable")
-            sys.exit(1)
     elif args.provider == "siliconflow":
         api_key = os.getenv("SILICONFLOW_API_KEY")
-        if not api_key:
-            logger.error("Please provide API key via --api-key or SILICONFLOW_API_KEY environment variable")
-            sys.exit(1)
     elif args.provider in ["kimi", "moonshot"]:
         api_key = os.getenv("MOONSHOT_API_KEY")
-        if not api_key:
-            logger.error("Please provide API key via --api-key or MOONSHOT_API_KEY environment variable")
-            sys.exit(1)
+    elif args.provider == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY")
     else:
         logger.error(f"Unknown provider: {args.provider}")
         sys.exit(1)
+
+    # If the primary provider key is missing, fall back to OpenRouter when set.
+    # An empty api_key lets ContextAwareAgent.resolve_llm_backend route via OpenRouter.
+    if not api_key:
+        if os.getenv("OPENROUTER_API_KEY"):
+            logger.info(
+                f"{args.provider} API key not set; falling back to OpenRouter "
+                "(OPENROUTER_API_KEY). Set the provider key to use it directly."
+            )
+            api_key = ""
+        else:
+            logger.error(
+                "No API key found. Set the provider key "
+                "(ARK_API_KEY/SILICONFLOW_API_KEY/MOONSHOT_API_KEY/DEEPSEEK_API_KEY) or "
+                "OPENROUTER_API_KEY (universal fallback)."
+            )
+            sys.exit(1)
     
     # Log provider info
     logger.info(f"Using provider: {args.provider}, model: {args.model or 'default'}")
@@ -1030,8 +1181,8 @@ def main():
                     
                     confirm = input("\nRun this task? (y/n): ").strip().lower()
                     if confirm == 'y':
-                        run_single_task(api_key, selected_task['task'], args.context_mode, 
-                                      provider=args.provider, model=args.model)
+                        run_single_task(api_key, selected_task['task'], args.context_mode,
+                                      provider=args.provider, model=args.model, output=args.output)
                     else:
                         print("Task cancelled.")
                 else:
@@ -1041,12 +1192,13 @@ def main():
                 print("\nExiting...")
                 sys.exit(0)
         else:
-            run_single_task(api_key, args.task, args.context_mode, 
-                          provider=args.provider, model=args.model)
-    
+            run_single_task(api_key, args.task, args.context_mode,
+                          provider=args.provider, model=args.model, output=args.output)
+
     elif args.mode == "ablation":
-        run_ablation_study(api_key, provider=args.provider, model=args.model, 
-                          context_modes=args.ablation_modes)
+        run_ablation_study(api_key, provider=args.provider, model=args.model,
+                          context_modes=args.ablation_modes, num_cases=args.cases,
+                          output=args.output)
     
     else:  # interactive
         interactive_mode(api_key, provider=args.provider, model=args.model)
