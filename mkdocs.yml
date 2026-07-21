@@ -19,6 +19,15 @@ theme:
   language: zh
   # Custom overrides: injects the language-tab switcher into the header.
   custom_dir: overrides
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  # Brand colours — indigo accent matches the book cover and SVG figures.
+  font:
+    text: Noto Sans SC, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif
+    code: JetBrains Mono, SFMono-Regular, Consolas, monospace
+  icon:
+    logo: material/robot-outline
+    repo: fontawesome/brands/github
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -35,15 +44,48 @@ theme:
         icon: material/weather-sunny
         name: 切换日间模式
   features:
-    - navigation.instant
-    - navigation.tracking
-    - navigation.sections
-    - navigation.top
-    - toc.follow
-    - content.code.copy
-    - content.code.annotate
-    - search.suggest
-    - search.highlight
+    # ── Navigation ──────────────────────────────────────────────
+    # Layout matches icyfenix.cn: a tall chapter tree on the left,
+    # minimal top bar (logo + search + repo). Do NOT use navigation.tabs
+    # — that would cram all 10 chapters into a horizontal bar.
+    - navigation.instant         # SPA-like page swaps, no full reload
+    - navigation.instant.progress # show a loading bar on slow swaps
+    - navigation.tracking        # URL changes with scroll
+    - navigation.sections        # group nav entries into titled sections
+    - navigation.expand          # expand the active chapter's subtree only
+    - navigation.indexes         # section index pages
+    - navigation.top             # "back to top" button
+    - navigation.footer          # prev/next pager in footer
+    # ── Table of contents (right sidebar) ──────────────────────
+    - toc.follow                 # TOC tracks scroll position
+    - toc.integrate              # fold TOC into left sidebar on mobile
+    # ── Content ─────────────────────────────────────────────────
+    - content.code.copy          # copy button on code blocks
+    - content.code.annotate      # rendered annotations in code
+    - content.action.edit        # "edit this page" pencil
+    - content.action.view        # "view source" link
+    - content.tooltips           # rich hover tooltips
+    - content.tabs.link          # sync same-named tabs across page
+    # ── Search ─────────────────────────────────────────────────
+    - search.suggest             # autocomplete-style suggestions
+    - search.highlight           # highlight matches in results
+    - search.share               # shareable search URLs
+
+plugins:
+  # Default Material plugins, made explicit so we can tune them.
+  - search:
+      lang:
+        - ja          # CJK-aware tokenizer; far better for Chinese than `en`
+        - en
+  # Stamp each page with its git commit date — readers see "最后更新" trust signal.
+  - git-revision-date-localized:
+      enable_creation_date: true
+      enable_git_follow: false   # avoids noisy "First revision older than last" warnings
+      type: date
+      fallback_to_build_date: true
+  # Auto-generate Open Graph / Twitter card images so links look rich when
+  # shared to WeChat / Twitter / Slack.
+  - social:
 
 markdown_extensions:
   - admonition
@@ -55,7 +97,16 @@ markdown_extensions:
       generic: true
   - pymdownx.highlight:
       anchor_linenums: true
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      # Render ```mermaid blocks as <div class="mermaid">…</div> so the
+      # mermaid.js runtime (loaded below in extra_javascript) picks them up.
+      # fence_div_format wraps raw content in a <div class="...">, which is
+      # exactly what mermaid.js expects. Any other fenced language still
+      # uses the default highlighted <pre><code>.
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_div_format
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
@@ -63,10 +114,13 @@ markdown_extensions:
 
 extra_javascript:
   - extras/lang-switcher.js
+  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
+  - extras/mermaid-init.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 extra_css:
   - extras/lang-switcher.css
+  - extras/book-theme.css
 
 # Language definitions for the switcher tab bar.
 # Each entry maps its prefix + suffix rules to rewrite URLs across editions.
@@ -79,17 +133,31 @@ extra:
     vi: { label: Tiếng Việt, prefix: book-vi/, suffix: .vi }
 
 nav:
+  # Layout mirrors icyfenix.cn: the left sidebar is a clean chapter tree.
+  # Each chapter title links directly to the prose; the per-chapter
+  # experiment index lives one click deeper so the sidebar stays scannable
+  # instead of being flooded by 78 individual experiment entries.
   - 首页: index.md
   - 引言: book/introduction.md
   - 第1章 Agent基础知识: book/chapter1.md
+  - '第1章 · 配套实验': chapter1/README.md
   - 第2章 上下文工程: book/chapter2.md
+  - '第2章 · 配套实验': chapter2/README.md
   - 第3章 用户记忆和知识库: book/chapter3.md
+  - '第3章 · 配套实验': chapter3/README.md
   - 第4章 工具: book/chapter4.md
+  - '第4章 · 配套实验': chapter4/README.md
   - 第5章 CodingAgent与代码生成: book/chapter5.md
+  - '第5章 · 配套实验': chapter5/README.md
   - 第6章 Agent的评估: book/chapter6.md
+  - '第6章 · 配套实验': chapter6/README.md
   - 第7章 模型后训练: book/chapter7.md
+  - '第7章 · 配套实验': chapter7/README.md
   - 第8章 Agent的自我进化: book/chapter8.md
+  - '第8章 · 配套实验': chapter8/README.md
   - 第9章 多模态与实时交互: book/chapter9.md
+  - '第9章 · 配套实验': chapter9/README.md
   - 第10章 多Agent协作: book/chapter10.md
+  - '第10章 · 配套实验': chapter10/README.md
   - 后记: book/afterword.md
   - 思考题参考答案: book/思考题参考答案.md
