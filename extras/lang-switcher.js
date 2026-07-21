@@ -33,18 +33,33 @@
     return "zh";
   }
 
-  /** Map current URL → target edition. */
+  /** Map current URL → target edition (directory URLs, e.g. /book-ta/...). */
   function mapUrl(currentPath, targetCode, currentLang) {
     if (targetCode === currentLang) return null;
     var src = cfg[currentLang];
     var dst = cfg[targetCode];
+
+    // Homepage: jump to the target edition's introduction.
+    if (
+      currentPath === "/" ||
+      currentPath === "/index.html" ||
+      currentPath.slice(-11) === "/index.html"
+    ) {
+      return "/" + dst.prefix + "introduction" + (dst.suffix || "") + "/";
+    }
+
     var url = currentPath.replace(src.prefix, dst.prefix);
-    if (src.suffix) url = url.replace(src.suffix + ".md", ".md");
-    if (dst.suffix) url = url.replace(/\.md$/, dst.suffix + ".md");
-    return (
-      url ||
-      dst.prefix + "introduction" + (dst.suffix || "") + ".md"
-    );
+
+    // Strip the source suffix (directory form: "x.ta/" → "x/").
+    if (src.suffix) {
+      url = url.split(src.suffix + "/").join("/");
+    }
+    // Add the destination suffix before the trailing slash.
+    if (dst.suffix) {
+      url = url.replace(/\/$/, dst.suffix + "/");
+    }
+
+    return url;
   }
 
   // ── sidebar rewriting ─────────────────────────────────────
