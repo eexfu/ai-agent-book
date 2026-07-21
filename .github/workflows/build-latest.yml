@@ -36,7 +36,7 @@ jobs:
       - name: Install build tools
         run: |
           brew install pandoc poppler librsvg
-          brew install --cask mactex-no-gui
+          brew install --cask mactex-no-gui font-dejavu font-noto-sans-cjk-sc font-noto-sans-cjk-tc
           echo "/Library/TeX/texbin" >> "$GITHUB_PATH"
 
       - name: Build PDFs
