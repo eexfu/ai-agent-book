@@ -72,6 +72,7 @@ extra_css:
 extra:
   languages:
     zh: { label: 中文, prefix: book/,   default: true }
+    zhtw: { label: 繁體中文, prefix: book-zhtw/, suffix: .zhtw }
     en: { label: English, prefix: book-en/ }
     ta: { label: தமிழ், prefix: book-ta/, suffix: .ta }
     vi: { label: Tiếng Việt, prefix: book-vi/, suffix: .vi }

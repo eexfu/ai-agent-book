@@ -13,8 +13,8 @@ mkdir -p "$DEST"
 # Site homepage (root index.md).
 cp "$ROOT/index.md" "$DEST/index.md"
 
-# The four language editions, each with its images/ subfolder.
-for lang in book book-en book-ta book-vi; do
+# The language editions, each with its images/ subfolder.
+for lang in book book-en book-ta book-vi book-zhtw; do
   mkdir -p "$DEST/$lang"
   cp -R "$ROOT/$lang" "$DEST/"
 done

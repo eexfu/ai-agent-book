@@ -17,9 +17,14 @@
 
   function detectLang(path) {
     var p = path.replace(/\/$/, "");
-    for (var code in cfg) {
-      if (cfg.hasOwnProperty(code) && p.indexOf(cfg[code].prefix) !== -1)
-        return code;
+    // Check most-specific (longest) prefixes first so e.g. `book-zhtw/`
+    // is matched before `book/` (which is a prefix of it).
+    var codes = Object.keys(cfg).sort(function (a, b) {
+      return cfg[b].prefix.length - cfg[a].prefix.length;
+    });
+    for (var i = 0; i < codes.length; i++) {
+      var code = codes[i];
+      if (p.indexOf(cfg[code].prefix) !== -1) return code;
     }
     var def = null;
     for (var c in cfg) {
